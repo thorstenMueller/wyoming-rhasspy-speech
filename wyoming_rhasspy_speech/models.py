@@ -16,7 +16,7 @@ class Model:
 
 MODEL_IDS = [
     ("cs_CZ-rhasspy", "Czech, Czech Republic"),
-    ("de_DE-rhasspy", "German, Germany"),
+    ("de_DE-zamia", "German, Germany"),
     ("en_US-rhasspy", "English, United States"),
     ("en_US-zamia", "English, United States"),
     ("es_ES-rhasspy", "Spanish, Spain"),
