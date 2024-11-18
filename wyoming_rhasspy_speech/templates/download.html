@@ -18,7 +18,7 @@
       const log = document.getElementById("log");
       log.value = "";
       
-      const response = await fetch("/api/download?id={{ model_id }}", {method:"post"});
+      const response = await fetch("{{ url_for('api_download', id=model_id) }}", {method:"post"});
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
 

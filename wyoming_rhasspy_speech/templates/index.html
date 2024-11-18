@@ -23,9 +23,9 @@
       <tr>
         <td>
           {% if model.id in downloaded_models %}
-          <a href="{{ url_for('manage') }}?id={{ model.id }}" class="btn btn-primary">Manage</a>
+          <a href="{{ url_for('manage', id=model_id) }}" class="btn btn-primary">Manage</a>
           {% else: %}
-          <a href="{{ url_for('download') }}?id={{ model.id }}" class="btn btn-secondary">Download</a>
+          <a href="{{ url_for('download', id=model_id) }}" class="btn btn-secondary">Download</a>
           {% endif %}
         </td>
         <td>{{ model.id }}</td>

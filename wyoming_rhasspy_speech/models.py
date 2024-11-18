@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-URL_FORMAT = "https://huggingface.co/rhasspy/rhasspy-speech/resolve/main/models/{model_id}?download=true"
+URL_FORMAT = "https://huggingface.co/datasets/rhasspy/rhasspy-speech/resolve/main/models/{model_id}.tar.gz?download=true"
 
 
 @dataclass

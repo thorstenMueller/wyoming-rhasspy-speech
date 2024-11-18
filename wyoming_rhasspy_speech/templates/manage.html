@@ -13,7 +13,7 @@
     <tbody>
       <tr>
         <td>
-          <a href="{{ url_for('sentences') }}?id={{ model_id }}" class="btn btn-success">Edit Sentences</a>
+          <a href="{{ url_for('sentences', id=model_id) }}" class="btn btn-success">Edit Sentences</a>
         </td>
         <td>Change the possible sentences you can speak.</td>
       </tr>
@@ -41,7 +41,7 @@
       const log = document.getElementById("log");
       log.value = "";
 
-      const response = await fetch("/api/train?id={{ model_id }}", {method:"post"});
+      const response = await fetch("{{ url_for('api_train', id=model_id) }}", {method:"post"});
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
 
