@@ -14,22 +14,26 @@ class Model:
     version: Optional[str] = None
 
 
+MODEL_IDS = [
+    ("cs_CZ-rhasspy", "Czech, Czech Republic"),
+    ("de_DE-rhasspy", "German, Germany"),
+    ("en_US-rhasspy", "English, United States"),
+    ("en_US-zamia", "English, United States"),
+    ("es_ES-rhasspy", "Spanish, Spain"),
+    ("fr_FR-guyot", "French, France"),
+    ("fr_FR-rhasspy", "French, France"),
+    ("it_IT-rhasspy", "Italian, Italy"),
+    ("nl_NL-cgn", "Dutch, Netherlands"),
+    ("ru_RU-rhasspy", "Russian, Russia"),
+]
+
 MODELS: Dict[str, Model] = {
-    m.id: m
-    for m in [
-        Model(
-            id="en_US-rhasspy",
-            language="English, United States",
-            language_code="en_US",
-            attribution="Rhasspy",
-            url=URL_FORMAT.format(model_id="en_US-rhasspy"),
-        ),
-        Model(
-            id="fr_FR-rhasspy",
-            language="French, France",
-            language_code="fr_FR",
-            attribution="Rhasspy",
-            url=URL_FORMAT.format(model_id="fr_FR-rhasspy"),
-        ),
-    ]
+    model_id: Model(
+        id=model_id,
+        language=model_lang,
+        language_code=model_id.split("-", maxsplit=1)[0],
+        attribution=model_id.split("-", maxsplit=1)[1].capitalize(),
+        url=URL_FORMAT.format(model_id=model_id),
+    )
+    for model_id, model_lang in MODEL_IDS
 }

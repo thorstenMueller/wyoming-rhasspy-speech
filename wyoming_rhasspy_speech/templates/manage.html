@@ -17,12 +17,12 @@
         </td>
         <td>Change the possible sentences you can speak.</td>
       </tr>
-      <!-- <tr> -->
-      <!--   <td> -->
-      <!--     <a href="{{ url_for('words') }}?id={{ model_id }}" class="btn btn-secondary">Edit Words</a> -->
-      <!--   </td> -->
-      <!--   <td>Add or change pronunciations for words.</td> -->
-      <!-- </tr> -->
+      <tr>
+        <td>
+          <a href="{{ url_for('words', id=model_id) }}" class="btn btn-secondary">Edit Words</a>
+        </td>
+        <td>Look up or guess word pronunciations.</td>
+      </tr>
   </tbody>
   </table>
 </div>

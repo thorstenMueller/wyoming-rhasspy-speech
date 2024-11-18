@@ -1,4 +1,5 @@
 """Web UI for training."""
+
 import io
 import logging
 import tarfile
@@ -199,7 +200,7 @@ def get_app(state: AppState) -> Flask:
         exposed_dict = await get_exposed_dict(
             state.settings.hass_token, state.settings.hass_websocket_uri
         )
-        SafeDumper.ignore_aliases = lambda *args: True
+        SafeDumper.ignore_aliases = lambda *args: True  # type: ignore[assignment]
         with io.StringIO() as hass_exposed_file:
             safe_dump({"lists": exposed_dict}, hass_exposed_file, sort_keys=False)
             return hass_exposed_file.getvalue()
@@ -207,39 +208,55 @@ def get_app(state: AppState) -> Flask:
     @app.route("/words", methods=["GET", "POST"])
     def words():
         model_id = request.args["id"]
+        words_str = ""
         found = ""
         guessed = ""
 
         if request.method == "POST":
-            words = request.form["words"].split()
+            words_str = request.form["words"]
             lexicon = LexiconDatabase(
                 state.settings.models_dir / model_id / "lexicon.db"
             )
 
-            missing_words = set()
-            for word in words:
-                if "[" in word:
-                    word_prons = get_sounds_like([word], lexicon)
-                else:
-                    word_prons = lexicon.lookup(word)
+            if "*" in words_str:
+                # pylint: disable=protected-access
+                cur = lexicon._conn.execute(
+                    "SELECT word, phonemes FROM word_phonemes WHERE word LIKE ?",
+                    (words_str.replace("*", "%"),),
+                )
+                for row in cur:
+                    found += f'{row[0]}: "/{row[1]}/"\n'
 
-                if word_prons:
-                    for word_pron in word_prons:
-                        phonemes = " ".join(word_pron)
-                        found += f'{word}: "/{phonemes}/"\n'
-                else:
-                    missing_words.add(word)
+            else:
+                words = words_str.split()
+                missing_words = set()
+                for word in words:
+                    if "[" in word:
+                        word_prons = get_sounds_like([word], lexicon)
+                    else:
+                        word_prons = lexicon.lookup(word)
 
-            if missing_words:
-                for word, phonemes in guess_pronunciations(
-                    missing_words,
-                    state.settings.models_dir / model_id / "g2p.fst",
-                    state.settings.tools_dir / "phonetisaurus",
-                ):
-                    guessed += f'{word}: "/{phonemes}/"\n'
+                    if word_prons:
+                        for word_pron in word_prons:
+                            phonemes = " ".join(word_pron)
+                            found += f'{word}: "/{phonemes}/"\n'
+                    else:
+                        missing_words.add(word)
+
+                if missing_words:
+                    for word, phonemes in guess_pronunciations(
+                        missing_words,
+                        state.settings.models_dir / model_id / "g2p.fst",
+                        state.settings.tools_dir / "phonetisaurus",
+                    ):
+                        guessed += f'{word}: "/{phonemes}/"\n'
 
         return render_template(
-            "words.html", model_id=model_id, found=found, guessed=guessed
+            "words.html",
+            model_id=model_id,
+            words=words_str,
+            found=found,
+            guessed=guessed,
         )
 
     @app.errorhandler(Exception)
