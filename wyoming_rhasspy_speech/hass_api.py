@@ -1,14 +1,12 @@
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 import aiohttp
 
 _LOGGER = logging.getLogger(__name__)
 
 
-async def get_exposed_dict(
-    token: str, host: str = "homeassistant.local", port=8123, protocol: str = "ws"
-) -> Dict[str, Any]:
+async def get_exposed_dict(token: str, uri: str) -> Dict[str, Any]:
     current_id = 0
 
     def next_id() -> int:
@@ -16,12 +14,11 @@ async def get_exposed_dict(
         current_id += 1
         return current_id
 
-    url = f"{protocol}://{host}:{port}/api/websocket"
     name_list = []
     area_list = []
     floor_list = []
     async with aiohttp.ClientSession() as session:
-        async with session.ws_connect(url) as websocket:
+        async with session.ws_connect(uri) as websocket:
             # Authenticate
             msg = await websocket.receive_json()
             assert msg["type"] == "auth_required", msg
@@ -64,7 +61,7 @@ async def get_exposed_dict(
             )
             msg = await websocket.receive_json()
             assert msg["success"]
-            devices = {device_info["id"]: device_info for device_info in msg["result"]}
+            # devices = {device_info["id"]: device_info for device_info in msg["result"]}
 
             # Floors
             await websocket.send_json(
@@ -75,7 +72,7 @@ async def get_exposed_dict(
             floors = {
                 floor_info["floor_id"]: floor_info for floor_info in msg["result"]
             }
-            for floor_id, floor_info in floors.items():
+            for _floor_id, floor_info in floors.items():
                 names = [floor_info["name"]]
                 names.extend(floor_info.get("aliases", []))
 
@@ -92,7 +89,7 @@ async def get_exposed_dict(
             msg = await websocket.receive_json()
             assert msg["success"]
             areas = {area_info["area_id"]: area_info for area_info in msg["result"]}
-            for area_id, area_info in areas.items():
+            for _area_id, area_info in areas.items():
                 names = [area_info["name"]]
                 names.extend(area_info.get("aliases", []))
 
@@ -122,14 +119,14 @@ async def get_exposed_dict(
                 domain = entity_id.split(".")[0]
                 name = None
                 names = []
-                area = None
+                # area = None
 
                 if entity_info:
                     name = entity_info.get("name") or entity_info["original_name"]
                     names.extend(entity_info.get("aliases", []))
 
-                    device_info = devices.get(entity_info.get("device_id"), {})
-                    area = device_info.get("area_id", entity_info.get("area_id"))
+                    # device_info = devices.get(entity_info.get("device_id"), {})
+                    # area = device_info.get("area_id", entity_info.get("area_id"))
 
                 if (not name) and (entity_id in states):
                     name = states[entity_id]["attributes"].get("friendly_name")

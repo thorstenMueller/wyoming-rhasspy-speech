@@ -1,25 +1,26 @@
-import asyncio
-import argparse
-import logging
-from collections.abc import Iterable
-from logging.handlers import QueueHandler
-import time
+"""Web UI for training."""
 import io
+import logging
 import tarfile
 import tempfile
+import time
+from collections.abc import Iterable
+from logging.handlers import QueueHandler
 from pathlib import Path
 from queue import Queue
 from threading import Thread
-from typing import List, Optional
+from typing import Optional
 from urllib.request import urlopen
 
 import rhasspy_speech
-from rhasspy_speech.g2p import LexiconDatabase, guess_pronunciations, get_sounds_like
-from flask import Response, jsonify, request, Flask, render_template, redirect, url_for
-from yaml import safe_dump, safe_load, SafeDumper
+from flask import Flask, Response, redirect, render_template, request
+from flask import url_for as flask_url_for
+from rhasspy_speech.g2p import LexiconDatabase, get_sounds_like, guess_pronunciations
+from werkzeug.middleware.proxy_fix import ProxyFix
+from yaml import SafeDumper, safe_dump, safe_load
 
-from .models import MODELS
 from .hass_api import get_exposed_dict
+from .models import MODELS
 from .shared import AppState
 
 _DIR = Path(__file__).parent
@@ -29,12 +30,24 @@ _LOGGER = logging.getLogger(__name__)
 DOWNLOAD_CHUNK_SIZE = 1024 * 10
 
 
+def ingress_url_for(endpoint, **values):
+    """Custom url_for that includes X-Ingress-Path dynamically."""
+    ingress_path = request.headers.get("X-Ingress-Path", "")
+    base_url = flask_url_for(endpoint, **values)
+    # Prepend the ingress path if it's present
+    return f"{ingress_path}{base_url}" if ingress_path else base_url
+
+
 def get_app(state: AppState) -> Flask:
     app = Flask(
         "rhasspy_speech",
         template_folder=str(_DIR / "templates"),
         static_folder=str(_DIR / "static"),
     )
+
+    if state.settings.hass_ingress:
+        app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1)  # type: ignore[assignment]
+        app.jinja_env.globals["url_for"] = ingress_url_for
 
     @app.route("/")
     def index():
@@ -161,7 +174,10 @@ def get_app(state: AppState) -> Flask:
 
                 state.skip_words[model_id] = sentences_dict.get("skip_words", [])
 
-                return redirect(url_for("manage", id=model_id))
+                if state.settings.hass_ingress:
+                    return redirect(ingress_url_for("manage", id=model_id))
+
+                return redirect(flask_url_for("manage", id=model_id))
             except Exception as err:
                 return render_template(
                     "sentences.html",
@@ -181,10 +197,7 @@ def get_app(state: AppState) -> Flask:
             return "No Home Assistant token"
 
         exposed_dict = await get_exposed_dict(
-            state.settings.hass_token,
-            host=state.settings.hass_host,
-            port=state.settings.hass_port,
-            protocol=state.settings.hass_protocol,
+            state.settings.hass_token, state.settings.hass_websocket_uri
         )
         SafeDumper.ignore_aliases = lambda *args: True
         with io.StringIO() as hass_exposed_file:

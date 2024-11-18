@@ -1,37 +1,26 @@
 #!/usr/bin/env python3
 import argparse
-import re
 import asyncio
 import logging
-import subprocess
-import time
-import io
-import os
-import wave
-import tempfile
-import logging
+import re
 import sqlite3
-from collections import defaultdict
-from collections.abc import Iterable
+import time
 from functools import partial
 from pathlib import Path
 from threading import Thread
-from typing import Dict, MutableSequence, Optional, List, Optional, Set
+from typing import Dict, List, Optional
 
-from wyoming.asr import Transcript, Transcribe
+from pyring_buffer import RingBuffer
+from pysilero_vad import SileroVoiceActivityDetector
+from rhasspy_speech import KaldiTranscriber
+from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioChunkConverter, AudioStart, AudioStop
 from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncServer
-from rhasspy_speech import train_model, KaldiTranscriber
-from yaml import safe_load
 
-from pyring_buffer import RingBuffer
-from pysilero_vad import SileroVoiceActivityDetector
-
-from .shared import AppState, AppSettings, LANG_TYPES, ARPA, GRAMMAR
+from .shared import ARPA, GRAMMAR, LANG_TYPES, AppSettings, AppState
 from .web_server import get_app
-
 
 _LOGGER = logging.getLogger()
 _DIR = Path(__file__).parent
@@ -40,36 +29,49 @@ RATE = 16000
 WIDTH = 2
 CHANNELS = 1
 
-_TOKEN = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiI4ZThlZWE1NDQ4ZDY0NGJjYjIzZDJlZmVkNjZmZDAyMyIsImlhdCI6MTY5NTMyMjk5MywiZXhwIjoyMDEwNjgyOTkzfQ.t9C8P1HT4xQleyXv8-SQbM_hkZMiIt8HTx0MA6wzIvY"
-
 
 async def main() -> None:
     """Main entry point."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--uri", default="stdio://", help="unix:// or tcp://")
-    parser.add_argument("--train-dir", required=True)
-    parser.add_argument("--tools-dir", required=True)
-    parser.add_argument("--models-dir", required=True)
+    parser.add_argument(
+        "--train-dir", required=True, help="Directory to write trained model files"
+    )
+    parser.add_argument(
+        "--tools-dir", required=True, help="Directory with kaldi, openfst, etc."
+    )
+    parser.add_argument(
+        "--models-dir", required=True, help="Directory with speech models"
+    )
+    parser.add_argument(
+        "--hass-token", help="Long-lived access token for Home Assistant"
+    )
+    parser.add_argument(
+        "--hass-websocket-uri",
+        default="ws://homeassistant.local:8123/api/websocket",
+        help="URI of Home Assistant websocket API",
+    )
+    parser.add_argument(
+        "--hass-ingress",
+        action="store_true",
+        help="Web server is behind Home Assistant ingress proxy",
+    )
+    parser.add_argument("--web-server-host", default="localhost")
+    parser.add_argument("--web-server-port", type=int, default=8099)
     parser.add_argument("--debug", action="store_true", help="Log DEBUG messages")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.DEBUG if args.debug else logging.INFO)
     _LOGGER.debug(args)
 
-    # TODO: Only load once
-    # skip_words: Set[str] = set()
-    # for sentence_file_path in args.sentence_file:
-    #     with open(sentence_file_path, "r", encoding="utf-8") as sentence_file:
-    #         sentence_dict = safe_load(sentence_file)
-    #         skip_words.update(sentence_dict.get("skip_words", []))
-
     state = AppState(
         settings=AppSettings(
             train_dir=Path(args.train_dir),
             tools_dir=Path(args.tools_dir),
             models_dir=Path(args.models_dir),
-            hass_token=_TOKEN,
-            hass_host="localhost",
+            hass_token=args.hass_token,
+            hass_websocket_uri=args.hass_websocket_uri,
+            hass_ingress=args.hass_ingress,
         )
     )
 
@@ -80,9 +82,9 @@ async def main() -> None:
     Thread(
         target=flask_app.run,
         kwargs={
-            "host": "localhost",
-            "port": 5000,
-            "debug": True,
+            "host": args.web_server_host,
+            "port": args.web_server_port,
+            "debug": args.debug,
             "use_reloader": False,
         },
         daemon=True,
@@ -92,13 +94,6 @@ async def main() -> None:
 
     try:
         await wyoming_server.run(partial(RhasspySpeechEventHandler, args, state))
-
-        # flask_app.run(
-        #     host="localhost",
-        #     port=5000,
-        #     debug=True,
-        #     use_reloader=True,
-        # )
     except KeyboardInterrupt:
         pass
 

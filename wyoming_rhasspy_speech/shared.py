@@ -1,7 +1,7 @@
 import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Optional, Set, List
+from typing import Dict, List, Optional
 
 from rhasspy_speech import KaldiTranscriber
 
@@ -9,15 +9,15 @@ ARPA = "arpa"
 GRAMMAR = "grammar"
 LANG_TYPES = (ARPA, GRAMMAR)
 
+
 @dataclass
 class AppSettings:
     train_dir: Path
     tools_dir: Path
     models_dir: Path
     hass_token: Optional[str] = None
-    hass_host: str = "homeassistant.local"
-    hass_port: int = 8123
-    hass_protocol: str = "ws"
+    hass_websocket_uri: str = "homeassistant.local"
+    hass_ingress: bool = False
 
 
 @dataclass
