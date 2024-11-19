@@ -7,3 +7,4 @@ aiohttp>=3,<4
 pysilero-vad>=2,<3
 pyring-buffer>=1,<2
 rhasspy-speech>=1,<2
+pyspeex-noise>=1,<2

@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 
 from pyring_buffer import RingBuffer
 from pysilero_vad import SileroVoiceActivityDetector
+from pyspeex_noise import AudioProcessor as SpeexAudioProcessor
 from rhasspy_speech import KaldiTranscriber
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioChunkConverter, AudioStart, AudioStop
@@ -19,6 +20,7 @@ from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncServer
 
+from .edit_distance import edit_distance
 from .shared import ARPA, GRAMMAR, LANG_TYPES, AppSettings, AppState
 from .web_server import get_app
 
@@ -28,6 +30,7 @@ _DIR = Path(__file__).parent
 RATE = 16000
 WIDTH = 2
 CHANNELS = 1
+BYTES_10MS = 320
 
 
 async def main() -> None:
@@ -134,6 +137,9 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
         )
         self.is_speech_started = False
 
+        self.speex = SpeexAudioProcessor(4000, -30)
+        self.speex_audio_buffer = bytes()
+
         _LOGGER.debug("Client connected: %s", self.client_id)
 
     async def _audio_stream(self, lang_type: str):
@@ -168,6 +174,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 int(self.before_speech_seconds * RATE * WIDTH * CHANNELS)
             )
             self.is_speech_started = False
+            self.speex_audio_buffer = bytes()
 
             await self.state.transcribers_lock.acquire()
             try:
@@ -210,21 +217,33 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             chunk = self.converter.convert(chunk)
 
             if self.is_speech_started:
-                for audio_queue in self.audio_queues.values():
-                    audio_queue.put_nowait(chunk.audio)
+                # Clean audio with speex
+                self.speex_audio_buffer += chunk.audio
+                clean_audio = bytes()
+                audio_idx = 0
+                while (audio_idx + BYTES_10MS) < len(self.speex_audio_buffer):
+                    clean_audio += self.speex.Process10ms(
+                        self.speex_audio_buffer[audio_idx : audio_idx + BYTES_10MS]
+                    ).audio
+                    audio_idx += BYTES_10MS
+
+                self.speex_audio_buffer = self.speex_audio_buffer[audio_idx:]
+                if clean_audio:
+                    for audio_queue in self.audio_queues.values():
+                        audio_queue.put_nowait(clean_audio)
             else:
                 self.before_speech_buffer.put(chunk.audio)
 
+                # Detect start of speech with silero VAD
                 self.vad_buffer += chunk.audio
                 while len(self.vad_buffer) >= self.vad_bytes_per_chunk:
                     vad_chunk = self.vad_buffer[: self.vad_bytes_per_chunk]
                     speech_prob = self.vad.process_chunk(vad_chunk)
                     if speech_prob > self.vad_threshold:
                         self.is_speech_started = True
-                        buffered_audio = self.before_speech_buffer.getvalue()
-                        for audio_queue in self.audio_queues.values():
-                            audio_queue.put_nowait(buffered_audio)
 
+                        # Buffered audio will be cleaned when next chunk arrives
+                        self.speex_audio_buffer += self.before_speech_buffer.getvalue()
                         break
 
                     self.vad_buffer = self.vad_buffer[self.vad_bytes_per_chunk :]
@@ -249,20 +268,26 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             )
 
             text = ""
-            text_arpa, text_grammar = f" {texts[ARPA]} ", f" {texts[GRAMMAR]} "
-            if text_grammar in text_arpa:
-                text = text_grammar.strip()
-            else:
-                skip_words = self.state.skip_words.get(self.model_id, [])
-                for skip_word in skip_words:
-                    # Remove skip word and try again
-                    text_arpa, text_grammar = remove_skip_word(
-                        text_arpa, skip_word
-                    ), remove_skip_word(text_grammar, skip_word)
+            # text_arpa, text_grammar = f" {texts[ARPA]} ", f" {texts[GRAMMAR]} "
+            text_arpa, text_grammar = texts[ARPA].strip(), texts[GRAMMAR].strip()
 
-                    if text_grammar in text_arpa:
-                        text = text_grammar.strip()
-                        break
+            if text_arpa == text_grammar:
+                text = text_grammar
+            elif text_arpa or text_grammar:
+                skip_words = self.state.skip_words.get(self.model_id, [])
+                words_arpa = text_arpa.split()
+                words_grammar = text_grammar.split()
+                distance = edit_distance(
+                    words_arpa, words_grammar, skip_words=skip_words
+                )
+                norm_distance = distance / max(len(words_arpa), len(words_grammar))
+                if norm_distance < 0.5:
+                    text = text_grammar
+                else:
+                    distance = edit_distance(text_arpa, text_grammar)
+                    norm_distance = distance / max(len(text_arpa), len(text_grammar))
+                    if norm_distance < 0.5:
+                        text = text_grammar
 
             # Get output text
             with sqlite3.Connection(
