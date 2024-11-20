@@ -13,6 +13,11 @@ if requirements_path.is_file():
         requirements = requirements_file.read().splitlines()
 
 module = "wyoming_rhasspy_speech"
+module_dir = this_dir / module
+
+data_files = list((module_dir / "templates").rglob("*")) + list(
+    (module_dir / "static").rglob("*")
+)
 
 # -----------------------------------------------------------------------------
 
@@ -26,6 +31,7 @@ setup(
     author_email="mike@rhasspy.org",
     license="MIT",
     packages=setuptools.find_packages(),
+    package_data={module: [str(p.relative_to(module_dir)) for p in data_files]},
     install_requires=requirements,
     classifiers=[
         "Development Status :: 3 - Alpha",
