@@ -4,13 +4,11 @@ import asyncio
 import logging
 import re
 import sqlite3
-import tempfile
 import time
-import wave
 from functools import partial
 from pathlib import Path
 from threading import Thread
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pyring_buffer import RingBuffer
 from pysilero_vad import SileroVoiceActivityDetector
@@ -22,7 +20,8 @@ from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncServer
 
-from .shared import ARPA, AppSettings, AppState
+from .edit_distance import edit_distance
+from .shared import ARPA, GRAMMAR, LANG_TYPES, AppSettings, AppState
 from .web_server import get_app
 
 _LOGGER = logging.getLogger()
@@ -123,6 +122,10 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
         self.model_id: Optional[str] = None
         self.state = state
+        self.audio_queues: Dict[str, asyncio.Queue[Optional[bytes]]] = {
+            lang_type: asyncio.Queue() for lang_type in LANG_TYPES
+        }
+        self.transcribe_tasks: Dict[str, asyncio.Task] = {}
 
         self.vad_buffer = bytes()
         self.vad = SileroVoiceActivityDetector()
@@ -137,9 +140,16 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
         self.speex = SpeexAudioProcessor(4000, -30)
         self.speex_audio_buffer = bytes()
 
-        self.clean_audio = bytes()
-
         _LOGGER.debug("Client connected: %s", self.client_id)
+
+    async def _audio_stream(self, lang_type: str):
+        audio_queue = self.audio_queues[lang_type]
+        while True:
+            chunk = await audio_queue.get()
+            if not chunk:
+                break
+
+            yield chunk
 
     async def handle_event(self, event: Event) -> bool:
         if Describe.is_type(event.type):
@@ -152,7 +162,11 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 _LOGGER.error("No model selected")
                 return False
 
-            self.clean_audio = bytes()
+            # Cancel running tasks
+            for lang_type, transcribe_task in self.transcribe_tasks.values():
+                self.audio_queues[lang_type].put_nowait(None)
+                transcribe_task.cancel()
+            self.transcribe_tasks.clear()
 
             self.vad.reset()
             self.vad_buffer = bytes()
@@ -178,11 +192,23 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                             / "kaldi"
                             / "bin",
                         )
-                        for lang_type in (ARPA,)
+                        for lang_type in LANG_TYPES
                     }
                     self.state.transcribers[self.model_id] = transcribers
 
                 _LOGGER.debug("Starting transcribers")
+
+                self.audio_queues = {
+                    lang_type: asyncio.Queue() for lang_type in LANG_TYPES
+                }
+                self.transcribe_tasks = {
+                    lang_type: asyncio.create_task(
+                        transcribers[lang_type].transcribe_stream_async(
+                            self._audio_stream(lang_type), RATE, WIDTH, CHANNELS
+                        )
+                    )
+                    for lang_type in LANG_TYPES
+                }
             except Exception:
                 self.state.transcribers_lock.release()
                 raise
@@ -202,7 +228,9 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                     audio_idx += BYTES_10MS
 
                 self.speex_audio_buffer = self.speex_audio_buffer[audio_idx:]
-                self.clean_audio += clean_audio
+                if clean_audio:
+                    for audio_queue in self.audio_queues.values():
+                        audio_queue.put_nowait(clean_audio)
             else:
                 self.before_speech_buffer.put(chunk.audio)
 
@@ -225,20 +253,10 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             start_time = time.monotonic()
 
             try:
-                with tempfile.NamedTemporaryFile(
-                    mode="wb+", suffix=".wav"
-                ) as temp_file:
-                    temp_wav: wave.Wave_write = wave.open(temp_file, "wb")
-                    with temp_wav:
-                        temp_wav.setframerate(16000)
-                        temp_wav.setsampwidth(2)
-                        temp_wav.setnchannels(1)
-                        temp_wav.writeframes(self.clean_audio)
-
-                    temp_file.seek(0)
-                    text = await self.state.transcribers[self.model_id][
-                        ARPA
-                    ].transcribe_wav_async(temp_file.name)
+                texts = {}
+                for lang_type in LANG_TYPES:
+                    self.audio_queues[lang_type].put_nowait(None)
+                    texts[lang_type] = await self.transcribe_tasks[lang_type]
             finally:
                 self.state.transcribers_lock.release()
 
@@ -246,8 +264,30 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 "Transcripts for client %s in %s second(s): %s",
                 self.client_id,
                 time.monotonic() - start_time,
-                text,
+                texts,
             )
+
+            text = ""
+            # text_arpa, text_grammar = f" {texts[ARPA]} ", f" {texts[GRAMMAR]} "
+            text_arpa, text_grammar = texts[ARPA].strip(), texts[GRAMMAR].strip()
+
+            if text_arpa == text_grammar:
+                text = text_grammar
+            elif text_arpa or text_grammar:
+                skip_words = self.state.skip_words.get(self.model_id, [])
+                words_arpa = text_arpa.split()
+                words_grammar = text_grammar.split()
+                distance = edit_distance(
+                    words_arpa, words_grammar, skip_words=skip_words
+                )
+                norm_distance = distance / max(len(words_arpa), len(words_grammar))
+                if norm_distance < 0.5:
+                    text = text_grammar
+                else:
+                    distance = edit_distance(text_arpa, text_grammar)
+                    norm_distance = distance / max(len(text_arpa), len(text_grammar))
+                    if norm_distance < 0.5:
+                        text = text_grammar
 
             # Get output text
             with sqlite3.Connection(
