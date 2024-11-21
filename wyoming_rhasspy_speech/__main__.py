@@ -21,7 +21,14 @@ from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncServer
 
 from .edit_distance import edit_distance
-from .shared import ARPA, GRAMMAR, LANG_TYPES, AppSettings, AppState
+from .shared import (
+    ARPA,
+    GRAMMAR,
+    LANG_TYPES,
+    AppSettings,
+    AppState,
+    TranscriberSettings,
+)
 from .web_server import get_app
 
 _LOGGER = logging.getLogger()
@@ -46,6 +53,7 @@ async def main() -> None:
     parser.add_argument(
         "--models-dir", required=True, help="Directory with speech models"
     )
+    # Home Assistant
     parser.add_argument(
         "--hass-token", help="Long-lived access token for Home Assistant"
     )
@@ -59,8 +67,28 @@ async def main() -> None:
         action="store_true",
         help="Web server is behind Home Assistant ingress proxy",
     )
+    # Web server
     parser.add_argument("--web-server-host", default="localhost")
     parser.add_argument("--web-server-port", type=int, default=8099)
+    # VAD
+    parser.add_argument("--no-vad", action="store_true")
+    parser.add_argument("--vad-threshold", type=float, default=0.5)
+    parser.add_argument("--before-speech-seconds", type=float, default=0.7)
+    # Speex
+    parser.add_argument("--no-speex", action="store_true")
+    parser.add_argument("--speex-noise-suppression", type=int, default=-30)
+    parser.add_argument("--speex-auto-gain", type=int, default=4000)
+    # Edit distance
+    parser.add_argument("--word-norm-distance-threshold", type=float, default=0.5)
+    parser.add_argument("--char-norm-distance-threshold", type=float, default=0.5)
+    # Transcribers
+    for lang_type in LANG_TYPES:
+        parser.add_argument(f"--no-{lang_type}", action="store_true")
+        parser.add_argument(f"--{lang_type}-max-active", type=int, default=7000)
+        parser.add_argument(f"--{lang_type}-lattice-beam", type=float, default=8.0)
+        parser.add_argument(f"--{lang_type}-acoustic-scale", type=float, default=1.0)
+        parser.add_argument(f"--{lang_type}-beam", type=float, default=24.0)
+    #
     parser.add_argument("--debug", action="store_true", help="Log DEBUG messages")
     args = parser.parse_args()
 
@@ -72,6 +100,29 @@ async def main() -> None:
             train_dir=Path(args.train_dir),
             tools_dir=Path(args.tools_dir),
             models_dir=Path(args.models_dir),
+            # VAD
+            vad_enabled=(not args.no_vad),
+            vad_threshold=args.vad_threshold,
+            before_speech_seconds=args.before_speech_seconds,
+            # Speex
+            speex_enabled=(not args.no_speex),
+            speex_noise_suppression=args.speex_noise_suppression,
+            speex_auto_gain=args.speex_auto_gain,
+            # Edit distance
+            word_norm_distance_threshold=args.word_norm_distance_threshold,
+            char_norm_distance_threshold=args.char_norm_distance_threshold,
+            # Transcribers
+            transcriber_settings={
+                lang_type: TranscriberSettings(
+                    is_enabled=(not getattr(args, f"no_{lang_type}")),
+                    max_active=getattr(args, f"{lang_type}_max_active"),
+                    lattice_beam=getattr(args, f"{lang_type}_lattice_beam"),
+                    acoustic_scale=getattr(args, f"{lang_type}_acoustic_scale"),
+                    beam=getattr(args, f"{lang_type}_beam"),
+                )
+                for lang_type in LANG_TYPES
+            },
+            # Home Assistant
             hass_token=args.hass_token,
             hass_websocket_uri=args.hass_websocket_uri,
             hass_ingress=args.hass_ingress,
@@ -122,23 +173,40 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
         self.model_id: Optional[str] = None
         self.state = state
-        self.audio_queues: Dict[str, asyncio.Queue[Optional[bytes]]] = {
-            lang_type: asyncio.Queue() for lang_type in LANG_TYPES
-        }
         self.transcribe_tasks: Dict[str, asyncio.Task] = {}
 
+        settings = self.state.settings
+        self.enabled_lang_types = [
+            lang_type
+            for lang_type, lang_settings in settings.transcriber_settings.items()
+            if lang_settings.is_enabled
+        ]
+        self.audio_queues: Dict[str, asyncio.Queue[Optional[bytes]]] = {
+            lang_type: asyncio.Queue() for lang_type in self.enabled_lang_types
+        }
+
+        # VAD
+        self.vad: Optional[SileroVoiceActivityDetector] = None
+        self.vad_bytes_per_chunk: int = 0
         self.vad_buffer = bytes()
-        self.vad = SileroVoiceActivityDetector()
-        self.vad_bytes_per_chunk = self.vad.chunk_bytes()
-        self.vad_threshold = 0.5
-        self.before_speech_seconds = 0.7
-        self.before_speech_buffer = RingBuffer(
-            int(self.before_speech_seconds * RATE * WIDTH * CHANNELS)
-        )
+        self.vad_threshold = settings.vad_threshold
+        self.before_speech_seconds = settings.before_speech_seconds
+        self.before_speech_buffer: Optional[RingBuffer] = None
+        if settings.vad_enabled:
+            self.vad = SileroVoiceActivityDetector()
+            self.vad_bytes_per_chunk = self.vad.chunk_bytes()
+            self.before_speech_buffer = RingBuffer(
+                int(self.before_speech_seconds * RATE * WIDTH * CHANNELS)
+            )
         self.is_speech_started = False
 
-        self.speex = SpeexAudioProcessor(4000, -30)
+        # Speex
+        self.speex: Optional[SpeexAudioProcessor] = None
         self.speex_audio_buffer = bytes()
+        if settings.speex_enabled:
+            self.speex = SpeexAudioProcessor(
+                settings.speex_auto_gain, settings.speex_noise_suppression
+            )
 
         _LOGGER.debug("Client connected: %s", self.client_id)
 
@@ -154,7 +222,6 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
     async def handle_event(self, event: Event) -> bool:
         if Describe.is_type(event.type):
             await self.write_event(self.get_info().event())
-            _LOGGER.debug("Sent info to client: %s", self.client_id)
             return True
 
         if AudioStart.is_type(event.type):
@@ -168,13 +235,14 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 transcribe_task.cancel()
             self.transcribe_tasks.clear()
 
-            self.vad.reset()
-            self.vad_buffer = bytes()
-            self.before_speech_buffer = RingBuffer(
-                int(self.before_speech_seconds * RATE * WIDTH * CHANNELS)
-            )
-            self.is_speech_started = False
-            self.speex_audio_buffer = bytes()
+            if self.vad is not None:
+                self.vad.reset()
+                self.vad_buffer = bytes()
+                self.before_speech_buffer = RingBuffer(
+                    int(self.before_speech_seconds * RATE * WIDTH * CHANNELS)
+                )
+                self.is_speech_started = False
+                self.speex_audio_buffer = bytes()
 
             await self.state.transcribers_lock.acquire()
             try:
@@ -191,8 +259,13 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                             kaldi_bin_dir=self.state.settings.tools_dir
                             / "kaldi"
                             / "bin",
+                            max_active=lang_settings.max_active,
+                            lattice_beam=lang_settings.lattice_beam,
+                            acoustic_scale=lang_settings.acoustic_scale,
+                            beam=lang_settings.beam,
                         )
-                        for lang_type in LANG_TYPES
+                        for lang_type, lang_settings in self.state.settings.transcriber_settings.items()
+                        if lang_settings.is_enabled
                     }
                     self.state.transcribers[self.model_id] = transcribers
 
@@ -207,7 +280,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                             self._audio_stream(lang_type), RATE, WIDTH, CHANNELS
                         )
                     )
-                    for lang_type in LANG_TYPES
+                    for lang_type in self.enabled_lang_types
                 }
             except Exception:
                 self.state.transcribers_lock.release()
@@ -216,25 +289,36 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             chunk = AudioChunk.from_event(event)
             chunk = self.converter.convert(chunk)
 
-            if self.is_speech_started:
-                # Clean audio with speex
-                self.speex_audio_buffer += chunk.audio
-                clean_audio = bytes()
-                audio_idx = 0
-                while (audio_idx + BYTES_10MS) < len(self.speex_audio_buffer):
-                    clean_audio += self.speex.Process10ms(
-                        self.speex_audio_buffer[audio_idx : audio_idx + BYTES_10MS]
-                    ).audio
-                    audio_idx += BYTES_10MS
+            if (self.vad is None) or self.is_speech_started:
+                if self.speex is not None:
+                    # Clean audio with speex
+                    self.speex_audio_buffer += chunk.audio
+                    audio_to_transcribe = bytes()
+                    audio_idx = 0
+                    while (audio_idx + BYTES_10MS) < len(self.speex_audio_buffer):
+                        audio_to_transcribe += self.speex.Process10ms(
+                            self.speex_audio_buffer[audio_idx : audio_idx + BYTES_10MS]
+                        ).audio
+                        audio_idx += BYTES_10MS
 
-                self.speex_audio_buffer = self.speex_audio_buffer[audio_idx:]
-                if clean_audio:
+                    self.speex_audio_buffer = self.speex_audio_buffer[audio_idx:]
+                else:
+                    # Not cleaned
+                    if self.speex_audio_buffer:
+                        audio_to_transcribe = self.speex_audio_buffer + chunk.audio
+                        self.speex_audio_buffer = bytes()
+                    else:
+                        audio_to_transcribe = chunk.audio
+
+                if audio_to_transcribe:
                     for audio_queue in self.audio_queues.values():
-                        audio_queue.put_nowait(clean_audio)
+                        audio_queue.put_nowait(audio_to_transcribe)
             else:
-                self.before_speech_buffer.put(chunk.audio)
+                # VAD
+                if self.before_speech_buffer is not None:
+                    self.before_speech_buffer.put(chunk.audio)
 
-                # Detect start of speech with silero VAD
+                # Detect start of speech
                 self.vad_buffer += chunk.audio
                 while len(self.vad_buffer) >= self.vad_bytes_per_chunk:
                     vad_chunk = self.vad_buffer[: self.vad_bytes_per_chunk]
@@ -243,7 +327,11 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                         self.is_speech_started = True
 
                         # Buffered audio will be cleaned when next chunk arrives
-                        self.speex_audio_buffer += self.before_speech_buffer.getvalue()
+                        if self.before_speech_buffer is not None:
+                            self.speex_audio_buffer += (
+                                self.before_speech_buffer.getvalue()
+                            )
+
                         break
 
                     self.vad_buffer = self.vad_buffer[self.vad_bytes_per_chunk :]
@@ -254,7 +342,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
             try:
                 texts = {}
-                for lang_type in LANG_TYPES:
+                for lang_type in self.enabled_lang_types:
                     self.audio_queues[lang_type].put_nowait(None)
                     texts[lang_type] = await self.transcribe_tasks[lang_type]
             finally:
@@ -267,27 +355,36 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 texts,
             )
 
-            text = ""
-            # text_arpa, text_grammar = f" {texts[ARPA]} ", f" {texts[GRAMMAR]} "
-            text_arpa, text_grammar = texts[ARPA].strip(), texts[GRAMMAR].strip()
+            if len(self.enabled_lang_types) == 1:
+                # Only one choice
+                text = texts[self.enabled_lang_types[0]]
+            else:
+                # Check ARPA against grammar
+                text = ""
+                text_arpa, text_grammar = texts[ARPA].strip(), texts[GRAMMAR].strip()
 
-            if text_arpa == text_grammar:
-                text = text_grammar
-            elif text_arpa or text_grammar:
-                skip_words = self.state.skip_words.get(self.model_id, [])
-                words_arpa = text_arpa.split()
-                words_grammar = text_grammar.split()
-                distance = edit_distance(
-                    words_arpa, words_grammar, skip_words=skip_words
-                )
-                norm_distance = distance / max(len(words_arpa), len(words_grammar))
-                if norm_distance < 0.5:
+                if text_arpa == text_grammar:
                     text = text_grammar
-                else:
-                    distance = edit_distance(text_arpa, text_grammar)
-                    norm_distance = distance / max(len(text_arpa), len(text_grammar))
-                    if norm_distance < 0.5:
+                elif text_arpa or text_grammar:
+                    skip_words = self.state.skip_words.get(self.model_id, [])
+                    words_arpa = text_arpa.split()
+                    words_grammar = text_grammar.split()
+                    distance = edit_distance(
+                        words_arpa, words_grammar, skip_words=skip_words
+                    )
+                    norm_distance = distance / max(len(words_arpa), len(words_grammar))
+                    if norm_distance < self.state.settings.word_norm_distance_threshold:
                         text = text_grammar
+                    else:
+                        distance = edit_distance(text_arpa, text_grammar)
+                        norm_distance = distance / max(
+                            len(text_arpa), len(text_grammar)
+                        )
+                        if (
+                            norm_distance
+                            < self.state.settings.char_norm_distance_threshold
+                        ):
+                            text = text_grammar
 
             # Get output text
             with sqlite3.Connection(
@@ -297,7 +394,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                     "SELECT output FROM sentences WHERE input = ? LIMIT 1", (text,)
                 )
                 for row in cur:
-                    text = row[0]
+                    text = row[0].strip()
                     _LOGGER.debug("Output text: %s", text)
                     break
 

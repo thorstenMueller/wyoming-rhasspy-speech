@@ -11,10 +11,38 @@ LANG_TYPES = (ARPA, GRAMMAR)
 
 
 @dataclass
+class TranscriberSettings:
+    is_enabled: bool
+    max_active: int
+    lattice_beam: float
+    acoustic_scale: float
+    beam: float
+
+
+@dataclass
 class AppSettings:
     train_dir: Path
     tools_dir: Path
     models_dir: Path
+
+    # VAD
+    vad_enabled: bool
+    vad_threshold: float
+    before_speech_seconds: float
+
+    # Speex
+    speex_enabled: bool
+    speex_noise_suppression: int
+    speex_auto_gain: int
+
+    # Edit distance
+    word_norm_distance_threshold: float
+    char_norm_distance_threshold: float
+
+    # Transcribers
+    transcriber_settings: Dict[str, TranscriberSettings] = field(default_factory=dict)
+
+    # Home Assistant
     hass_token: Optional[str] = None
     hass_websocket_uri: str = "homeassistant.local"
     hass_ingress: bool = False
