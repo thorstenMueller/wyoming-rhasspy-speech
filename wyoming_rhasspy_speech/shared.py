@@ -12,7 +12,7 @@ LANG_TYPES = (ARPA, GRAMMAR)
 
 @dataclass
 class TranscriberSettings:
-    is_enabled: bool
+    is_streaming: bool
     max_active: int
     lattice_beam: float
     acoustic_scale: float

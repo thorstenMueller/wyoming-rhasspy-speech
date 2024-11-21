@@ -2,9 +2,12 @@
 import argparse
 import asyncio
 import logging
+import os
 import re
 import sqlite3
+import tempfile
 import time
+import wave
 from functools import partial
 from pathlib import Path
 from threading import Thread
@@ -71,19 +74,44 @@ async def main() -> None:
     parser.add_argument("--web-server-host", default="localhost")
     parser.add_argument("--web-server-port", type=int, default=8099)
     # VAD
-    parser.add_argument("--no-vad", action="store_true")
-    parser.add_argument("--vad-threshold", type=float, default=0.5)
-    parser.add_argument("--before-speech-seconds", type=float, default=0.7)
+    parser.add_argument(
+        "--no-vad", action="store_true", help="Disable voice activity detection"
+    )
+    parser.add_argument(
+        "--vad-threshold",
+        type=float,
+        default=0.5,
+        help="Threshold for VAD (default: 0.5)",
+    )
+    parser.add_argument(
+        "--before-speech-seconds",
+        type=float,
+        default=0.7,
+        help="Seconds of audio to keep before speech is detected (default: 0.7)",
+    )
     # Speex
-    parser.add_argument("--no-speex", action="store_true")
-    parser.add_argument("--speex-noise-suppression", type=int, default=-30)
-    parser.add_argument("--speex-auto-gain", type=int, default=4000)
+    parser.add_argument(
+        "--no-speex", action="store_true", help="Disable audio cleaning with Speex"
+    )
+    parser.add_argument(
+        "--speex-noise-suppression",
+        type=int,
+        default=-30,
+        help="Noise suppression level (default: -30)",
+    )
+    parser.add_argument(
+        "--speex-auto-gain",
+        type=int,
+        default=4000,
+        help="Auto gain level (default: 4000)",
+    )
     # Edit distance
     parser.add_argument("--word-norm-distance-threshold", type=float, default=0.5)
     parser.add_argument("--char-norm-distance-threshold", type=float, default=0.5)
     # Transcribers
     for lang_type in LANG_TYPES:
         parser.add_argument(f"--no-{lang_type}", action="store_true")
+        parser.add_argument(f"--no-{lang_type}-streaming", action="store_true")
         parser.add_argument(f"--{lang_type}-max-active", type=int, default=7000)
         parser.add_argument(f"--{lang_type}-lattice-beam", type=float, default=8.0)
         parser.add_argument(f"--{lang_type}-acoustic-scale", type=float, default=1.0)
@@ -114,13 +142,14 @@ async def main() -> None:
             # Transcribers
             transcriber_settings={
                 lang_type: TranscriberSettings(
-                    is_enabled=(not getattr(args, f"no_{lang_type}")),
+                    is_streaming=(not getattr(args, f"no_{lang_type}_streaming")),
                     max_active=getattr(args, f"{lang_type}_max_active"),
                     lattice_beam=getattr(args, f"{lang_type}_lattice_beam"),
                     acoustic_scale=getattr(args, f"{lang_type}_acoustic_scale"),
                     beam=getattr(args, f"{lang_type}_beam"),
                 )
                 for lang_type in LANG_TYPES
+                if not getattr(args, f"no_{lang_type}")
             },
             # Home Assistant
             hass_token=args.hass_token,
@@ -176,13 +205,15 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
         self.transcribe_tasks: Dict[str, asyncio.Task] = {}
 
         settings = self.state.settings
-        self.enabled_lang_types = [
-            lang_type
+        self.streaming_audio_queues: Dict[str, asyncio.Queue[Optional[bytes]]] = {
+            lang_type: asyncio.Queue()
             for lang_type, lang_settings in settings.transcriber_settings.items()
-            if lang_settings.is_enabled
-        ]
-        self.audio_queues: Dict[str, asyncio.Queue[Optional[bytes]]] = {
-            lang_type: asyncio.Queue() for lang_type in self.enabled_lang_types
+            if lang_settings.is_streaming
+        }
+        self.wav_audio_buffers: Dict[str, bytes] = {
+            lang_type: bytes()
+            for lang_type, lang_settings in settings.transcriber_settings.items()
+            if not lang_settings.is_streaming
         }
 
         # VAD
@@ -211,7 +242,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
         _LOGGER.debug("Client connected: %s", self.client_id)
 
     async def _audio_stream(self, lang_type: str):
-        audio_queue = self.audio_queues[lang_type]
+        audio_queue = self.streaming_audio_queues[lang_type]
         while True:
             chunk = await audio_queue.get()
             if not chunk:
@@ -231,11 +262,12 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
             # Cancel running tasks
             for lang_type, transcribe_task in self.transcribe_tasks.values():
-                self.audio_queues[lang_type].put_nowait(None)
+                self.streaming_audio_queues[lang_type].put_nowait(None)
                 transcribe_task.cancel()
             self.transcribe_tasks.clear()
 
             if self.vad is not None:
+                # Reset VAD
                 self.vad.reset()
                 self.vad_buffer = bytes()
                 self.before_speech_buffer = RingBuffer(
@@ -265,22 +297,27 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                             beam=lang_settings.beam,
                         )
                         for lang_type, lang_settings in self.state.settings.transcriber_settings.items()
-                        if lang_settings.is_enabled
                     }
                     self.state.transcribers[self.model_id] = transcribers
 
                 _LOGGER.debug("Starting transcribers")
 
-                self.audio_queues = {
-                    lang_type: asyncio.Queue() for lang_type in LANG_TYPES
-                }
+                # Clear queues
+                for audio_queue in self.streaming_audio_queues.values():
+                    while not audio_queue.empty():
+                        audio_queue.get_nowait()
+
+                # Clear WAV buffers
+                for lang_type in self.wav_audio_buffers:
+                    self.wav_audio_buffers[lang_type] = bytes()
+
                 self.transcribe_tasks = {
                     lang_type: asyncio.create_task(
                         transcribers[lang_type].transcribe_stream_async(
                             self._audio_stream(lang_type), RATE, WIDTH, CHANNELS
                         )
                     )
-                    for lang_type in self.enabled_lang_types
+                    for lang_type in self.streaming_audio_queues
                 }
             except Exception:
                 self.state.transcribers_lock.release()
@@ -311,8 +348,11 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                         audio_to_transcribe = chunk.audio
 
                 if audio_to_transcribe:
-                    for audio_queue in self.audio_queues.values():
+                    for audio_queue in self.streaming_audio_queues.values():
                         audio_queue.put_nowait(audio_to_transcribe)
+
+                    for lang_type in self.wav_audio_buffers:
+                        self.wav_audio_buffers[lang_type] += audio_to_transcribe
             else:
                 # VAD
                 if self.before_speech_buffer is not None:
@@ -341,10 +381,37 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             start_time = time.monotonic()
 
             try:
-                texts = {}
-                for lang_type in self.enabled_lang_types:
-                    self.audio_queues[lang_type].put_nowait(None)
-                    texts[lang_type] = await self.transcribe_tasks[lang_type]
+                # Tell transcribers to stop
+                for lang_type in self.streaming_audio_queues:
+                    self.streaming_audio_queues[lang_type].put_nowait(None)
+
+                # Gather transcriptions
+                fut_to_lang_type: Dict[asyncio.Future, str] = {
+                    task: lang_type for lang_type, task in self.transcribe_tasks.items()
+                }
+
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    temp_dir = "/tmp"
+                    for lang_type, audio_buffer in self.wav_audio_buffers.items():
+                        wav_path = os.path.join(temp_dir, f"{lang_type}.wav")
+                        wav_file: wave.Wave_write = wave.open(wav_path, "wb")
+                        with wav_file:
+                            wav_file.setframerate(RATE)
+                            wav_file.setsampwidth(WIDTH)
+                            wav_file.setnchannels(CHANNELS)
+                            wav_file.writeframes(audio_buffer)
+
+                        task = asyncio.create_task(
+                            self.state.transcribers[self.model_id][
+                                lang_type
+                            ].transcribe_wav_async(wav_path)
+                        )
+                        fut_to_lang_type[task] = lang_type
+
+                texts: Dict[str, str] = {}
+                results = await asyncio.gather(*(fut_to_lang_type.keys()))
+                for lang_type, result in zip(fut_to_lang_type.values(), results):
+                    texts[lang_type] = result or ""
             finally:
                 self.state.transcribers_lock.release()
 
@@ -355,12 +422,12 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 texts,
             )
 
-            if len(self.enabled_lang_types) == 1:
+            text = ""
+            if len(texts) == 1:
                 # Only one choice
-                text = texts[self.enabled_lang_types[0]]
-            else:
+                text = next(iter(texts.values()), "")
+            elif len(texts) > 1:
                 # Check ARPA against grammar
-                text = ""
                 text_arpa, text_grammar = texts[ARPA].strip(), texts[GRAMMAR].strip()
 
                 if text_arpa == text_grammar:
