@@ -412,7 +412,6 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 }
 
                 with tempfile.TemporaryDirectory() as temp_dir:
-                    temp_dir = "/tmp"
                     for lang_type, audio_buffer in self.wav_audio_buffers.items():
                         wav_path = os.path.join(temp_dir, f"{lang_type}.wav")
                         wav_file: wave.Wave_write = wave.open(wav_path, "wb")
