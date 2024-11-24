@@ -287,6 +287,9 @@ def train_model(state: AppState, model_id: str, log_queue: Queue):
             phonetisaurus_bin=state.settings.tools_dir / "phonetisaurus",
             opengrm_dir=state.settings.tools_dir / "opengrm",
             openfst_dir=state.settings.tools_dir / "openfst",
+            rescore_order=None
+            if (not state.settings.arpa_rescore)
+            else state.settings.arpa_rescore_order,
         )
         _LOGGER.debug(
             "Training completed in %s second(s)", time.monotonic() - start_time

@@ -6,6 +6,7 @@ from typing import Dict, List, Optional
 from rhasspy_speech import KaldiTranscriber
 
 ARPA = "arpa"
+ARPA_RESCORE = "arpa_rescore"
 GRAMMAR = "grammar"
 LANG_TYPES = (ARPA, GRAMMAR)
 
@@ -25,6 +26,8 @@ class AppSettings:
     tools_dir: Path
     models_dir: Path
 
+    volume_multiplier: float
+
     # VAD
     vad_enabled: bool
     vad_threshold: float
@@ -38,6 +41,10 @@ class AppSettings:
     # Edit distance
     word_norm_distance_threshold: float
     char_norm_distance_threshold: float
+
+    arpa_rescore: bool
+    arpa_rescore_order: Optional[int]
+    arpa_rescore_acoustic_scale: float
 
     # Transcribers
     transcriber_settings: Dict[str, TranscriberSettings] = field(default_factory=dict)

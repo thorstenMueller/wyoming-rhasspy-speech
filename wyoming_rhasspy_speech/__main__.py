@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import array
 import asyncio
 import logging
 import os
@@ -26,6 +27,7 @@ from wyoming.server import AsyncEventHandler, AsyncServer
 from .edit_distance import edit_distance
 from .shared import (
     ARPA,
+    ARPA_RESCORE,
     GRAMMAR,
     LANG_TYPES,
     AppSettings,
@@ -73,6 +75,8 @@ async def main() -> None:
     # Web server
     parser.add_argument("--web-server-host", default="localhost")
     parser.add_argument("--web-server-port", type=int, default=8099)
+    # Audio
+    parser.add_argument("--volume-multiplier", type=float, default=1.0)
     # VAD
     parser.add_argument(
         "--no-vad", action="store_true", help="Disable voice activity detection"
@@ -91,7 +95,7 @@ async def main() -> None:
     )
     # Speex
     parser.add_argument(
-        "--no-speex", action="store_true", help="Disable audio cleaning with Speex"
+        "--speex", action="store_true", help="Enable audio cleaning with Speex"
     )
     parser.add_argument(
         "--speex-noise-suppression",
@@ -116,6 +120,10 @@ async def main() -> None:
         parser.add_argument(f"--{lang_type}-lattice-beam", type=float, default=8.0)
         parser.add_argument(f"--{lang_type}-acoustic-scale", type=float, default=1.0)
         parser.add_argument(f"--{lang_type}-beam", type=float, default=24.0)
+
+    parser.add_argument("--arpa-rescore", action="store_true")
+    parser.add_argument("--arpa-rescore-order", type=int, default=5)
+    parser.add_argument("--arpa-rescore-acoustic-scale", type=float, default=0.1)
     #
     parser.add_argument("--debug", action="store_true", help="Log DEBUG messages")
     args = parser.parse_args()
@@ -128,18 +136,23 @@ async def main() -> None:
             train_dir=Path(args.train_dir),
             tools_dir=Path(args.tools_dir),
             models_dir=Path(args.models_dir),
+            # Audio
+            volume_multiplier=args.volume_multiplier,
             # VAD
             vad_enabled=(not args.no_vad),
             vad_threshold=args.vad_threshold,
             before_speech_seconds=args.before_speech_seconds,
             # Speex
-            speex_enabled=(not args.no_speex),
+            speex_enabled=args.speex,
             speex_noise_suppression=args.speex_noise_suppression,
             speex_auto_gain=args.speex_auto_gain,
             # Edit distance
             word_norm_distance_threshold=args.word_norm_distance_threshold,
             char_norm_distance_threshold=args.char_norm_distance_threshold,
             # Transcribers
+            arpa_rescore=args.arpa_rescore,
+            arpa_rescore_order=args.arpa_rescore_order,
+            arpa_rescore_acoustic_scale=args.arpa_rescore_acoustic_scale,
             transcriber_settings={
                 lang_type: TranscriberSettings(
                     is_streaming=(not getattr(args, f"no_{lang_type}_streaming")),
@@ -215,6 +228,11 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             for lang_type, lang_settings in settings.transcriber_settings.items()
             if not lang_settings.is_streaming
         }
+
+        # Audio
+        self.volume_multiplier: Optional[float] = None
+        if settings.volume_multiplier != 1.0:
+            self.volume_multiplier = settings.volume_multiplier
 
         # VAD
         self.vad: Optional[SileroVoiceActivityDetector] = None
@@ -326,6 +344,9 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             chunk = AudioChunk.from_event(event)
             chunk = self.converter.convert(chunk)
 
+            if self.volume_multiplier is not None:
+                chunk.audio = multiply_volume(chunk.audio, self.volume_multiplier)
+
             if (self.vad is None) or self.is_speech_started:
                 if self.speex is not None:
                     # Clean audio with speex
@@ -401,11 +422,33 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                             wav_file.setnchannels(CHANNELS)
                             wav_file.writeframes(audio_buffer)
 
-                        task = asyncio.create_task(
-                            self.state.transcribers[self.model_id][
-                                lang_type
-                            ].transcribe_wav_async(wav_path)
-                        )
+                        if self.state.settings.arpa_rescore:
+                            # With rescoring
+                            task = asyncio.create_task(
+                                self.state.transcribers[self.model_id][
+                                    lang_type
+                                ].transcribe_wav_nnet3_rescore_async(
+                                    wav_path,
+                                    old_lang_dir=self.state.settings.train_dir
+                                    / self.model_id
+                                    / "data"
+                                    / f"lang_{ARPA}",
+                                    new_lang_dir=self.state.settings.train_dir
+                                    / self.model_id
+                                    / "data"
+                                    / f"lang_{ARPA_RESCORE}",
+                                    kaldi_dir=self.state.settings.tools_dir / "kaldi",
+                                    rescore_acoustic_scale=self.state.settings.arpa_rescore_acoustic_scale,
+                                )
+                            )
+                        else:
+                            # Without rescoring
+                            task = asyncio.create_task(
+                                self.state.transcribers[self.model_id][
+                                    lang_type
+                                ].transcribe_wav_async(wav_path)
+                            )
+
                         fut_to_lang_type[task] = lang_type
 
                 texts: Dict[str, str] = {}
@@ -431,6 +474,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 text_arpa, text_grammar = texts[ARPA].strip(), texts[GRAMMAR].strip()
 
                 if text_arpa == text_grammar:
+                    _LOGGER.debug("Exact match")
                     text = text_grammar
                 elif text_arpa or text_grammar:
                     skip_words = self.state.skip_words.get(self.model_id, [])
@@ -441,6 +485,11 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                     )
                     norm_distance = distance / max(len(words_arpa), len(words_grammar))
                     if norm_distance < self.state.settings.word_norm_distance_threshold:
+                        _LOGGER.debug(
+                            "Word distance match: distance=%s, norm_distance=%s",
+                            distance,
+                            norm_distance,
+                        )
                         text = text_grammar
                     else:
                         distance = edit_distance(text_arpa, text_grammar)
@@ -451,6 +500,11 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                             norm_distance
                             < self.state.settings.char_norm_distance_threshold
                         ):
+                            _LOGGER.debug(
+                                "Character distance match: distance=%s, norm_distance=%s",
+                                distance,
+                                norm_distance,
+                            )
                             text = text_grammar
 
             # Get output text
@@ -541,6 +595,19 @@ def remove_skip_word(text: str, skip_word: str) -> str:
     text = skip_word_pattern.sub(" ", f" {text} ").strip()
     text = re.sub(r"\s+", " ", text)
     return text
+
+
+def multiply_volume(chunk: bytes, volume_multiplier: float) -> bytes:
+    """Multiplies 16-bit PCM samples by a constant."""
+
+    def _clamp(val: float) -> float:
+        """Clamp to signed 16-bit."""
+        return max(-32768, min(32767, val))
+
+    return array.array(
+        "h",
+        (int(_clamp(value * volume_multiplier)) for value in array.array("h", chunk)),
+    ).tobytes()
 
 
 # -----------------------------------------------------------------------------
