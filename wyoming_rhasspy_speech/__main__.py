@@ -436,7 +436,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                                     / self.model_id
                                     / "data"
                                     / f"lang_{ARPA_RESCORE}",
-                                    kaldi_dir=self.state.settings.tools_dir / "kaldi",
+                                    tools_dir=self.state.settings.tools_dir,
                                     rescore_acoustic_scale=self.state.settings.arpa_rescore_acoustic_scale,
                                 )
                             )
