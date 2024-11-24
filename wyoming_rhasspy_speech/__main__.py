@@ -450,10 +450,10 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
                         fut_to_lang_type[task] = lang_type
 
-                texts: Dict[str, str] = {}
-                results = await asyncio.gather(*(fut_to_lang_type.keys()))
-                for lang_type, result in zip(fut_to_lang_type.values(), results):
-                    texts[lang_type] = result or ""
+                    texts: Dict[str, str] = {}
+                    results = await asyncio.gather(*(fut_to_lang_type.keys()))
+                    for lang_type, result in zip(fut_to_lang_type.values(), results):
+                        texts[lang_type] = result or ""
             finally:
                 self.state.transcribers_lock.release()
 
