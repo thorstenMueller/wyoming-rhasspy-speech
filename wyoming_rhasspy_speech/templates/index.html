@@ -16,6 +16,7 @@
         <th>Id</th>
         <th>Language</th>
         <th>Attribution</th>
+        <th>&nbsp;</th>
       </tr>
     </thead>
     <tbody>
@@ -31,6 +32,13 @@
         <td>{{ model.id }}</td>
         <td>{{ model.language }}</td>
         <td>{{ model.attribution }}</td>
+        <td>
+          {% if model.id in downloaded_models %}
+          <a href="{{ url_for('delete', id=model_id) }}" onclick="return confirm('Are you sure? This will delete your sentences too.')" class="btn btn-danger">Delete</a>
+          {% else: %}
+          &nbsp;
+          {% endif %}
+        </td>
       </tr>
       {% endfor %}
     </tbody>

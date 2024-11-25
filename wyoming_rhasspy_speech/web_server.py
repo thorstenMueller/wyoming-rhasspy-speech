@@ -2,6 +2,7 @@
 
 import io
 import logging
+import shutil
 import tarfile
 import tempfile
 import time
@@ -191,6 +192,19 @@ def get_app(state: AppState) -> Flask:
             sentences = sentences_path.read_text(encoding="utf-8")
 
         return render_template("sentences.html", model_id=model_id, sentences=sentences)
+
+    @app.route("/delete", methods=["GET", "POST"])
+    def delete():
+        model_id = request.args["id"]
+        model_data_dir = state.settings.models_dir / model_id
+        if model_data_dir.is_dir():
+            shutil.rmtree(model_data_dir)
+
+        model_train_dir = state.settings.train_dir / model_id
+        if model_train_dir.is_dir():
+            shutil.rmtree(model_train_dir)
+
+        return redirect(ingress_url_for("index"))
 
     @app.route("/api/hass_exposed", methods=["POST"])
     async def api_hass_exposed() -> str:
