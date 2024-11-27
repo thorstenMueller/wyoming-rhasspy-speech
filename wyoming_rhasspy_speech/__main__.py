@@ -3,37 +3,28 @@ import argparse
 import array
 import asyncio
 import logging
-import os
 import re
-import sqlite3
 import tempfile
 import time
 import wave
 from functools import partial
 from pathlib import Path
 from threading import Thread
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from pyring_buffer import RingBuffer
 from pysilero_vad import SileroVoiceActivityDetector
 from pyspeex_noise import AudioProcessor as SpeexAudioProcessor
-from rhasspy_speech import KaldiTranscriber
+from rhasspy_speech.intent_fst import get_matching_scores
+from rhasspy_speech.tools import KaldiTools
+from rhasspy_speech.transcribe_wav import KaldiNnet3WavTranscriber
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioChunkConverter, AudioStart, AudioStop
 from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncServer
 
-from .edit_distance import edit_distance
-from .shared import (
-    ARPA,
-    ARPA_RESCORE,
-    GRAMMAR,
-    LANG_TYPES,
-    AppSettings,
-    AppState,
-    TranscriberSettings,
-)
+from .shared import AppSettings, AppState
 from .web_server import get_app
 
 _LOGGER = logging.getLogger()
@@ -84,8 +75,8 @@ async def main() -> None:
     parser.add_argument(
         "--vad-threshold",
         type=float,
-        default=0.5,
-        help="Threshold for VAD (default: 0.5)",
+        default=0.9,
+        help="Threshold for VAD (default: 0.9)",
     )
     parser.add_argument(
         "--before-speech-seconds",
@@ -110,20 +101,17 @@ async def main() -> None:
         help="Auto gain level (default: 4000)",
     )
     # Edit distance
-    parser.add_argument("--word-norm-distance-threshold", type=float, default=0.5)
-    parser.add_argument("--char-norm-distance-threshold", type=float, default=0.5)
+    parser.add_argument("--norm-distance-threshold", type=float, default=0.15)
     # Transcribers
-    for lang_type in LANG_TYPES:
-        parser.add_argument(f"--no-{lang_type}", action="store_true")
-        parser.add_argument(f"--no-{lang_type}-streaming", action="store_true")
-        parser.add_argument(f"--{lang_type}-max-active", type=int, default=7000)
-        parser.add_argument(f"--{lang_type}-lattice-beam", type=float, default=8.0)
-        parser.add_argument(f"--{lang_type}-acoustic-scale", type=float, default=1.0)
-        parser.add_argument(f"--{lang_type}-beam", type=float, default=24.0)
-
+    parser.add_argument("--max-active", type=int, default=7000)
+    parser.add_argument("--lattice-beam", type=float, default=8.0)
+    parser.add_argument("--acoustic-scale", type=float, default=1.0)
+    parser.add_argument("--beam", type=float, default=24.0)
+    parser.add_argument("--nbest", type=int, default=5)
+    #
     parser.add_argument("--arpa-rescore", action="store_true")
     parser.add_argument("--arpa-rescore-order", type=int, default=5)
-    parser.add_argument("--arpa-rescore-acoustic-scale", type=float, default=0.1)
+    parser.add_argument("--arpa-rescore-acoustic-scale", type=float, default=0.5)
     #
     parser.add_argument("--debug", action="store_true", help="Log DEBUG messages")
     args = parser.parse_args()
@@ -147,23 +135,17 @@ async def main() -> None:
             speex_noise_suppression=args.speex_noise_suppression,
             speex_auto_gain=args.speex_auto_gain,
             # Edit distance
-            word_norm_distance_threshold=args.word_norm_distance_threshold,
-            char_norm_distance_threshold=args.char_norm_distance_threshold,
+            norm_distance_threshold=args.norm_distance_threshold,
             # Transcribers
+            max_active=args.max_active,
+            lattice_beam=args.lattice_beam,
+            acoustic_scale=args.acoustic_scale,
+            beam=args.beam,
+            nbest=args.nbest,
+            #
             arpa_rescore=args.arpa_rescore,
             arpa_rescore_order=args.arpa_rescore_order,
             arpa_rescore_acoustic_scale=args.arpa_rescore_acoustic_scale,
-            transcriber_settings={
-                lang_type: TranscriberSettings(
-                    is_streaming=(not getattr(args, f"no_{lang_type}_streaming")),
-                    max_active=getattr(args, f"{lang_type}_max_active"),
-                    lattice_beam=getattr(args, f"{lang_type}_lattice_beam"),
-                    acoustic_scale=getattr(args, f"{lang_type}_acoustic_scale"),
-                    beam=getattr(args, f"{lang_type}_beam"),
-                )
-                for lang_type in LANG_TYPES
-                if not getattr(args, f"no_{lang_type}")
-            },
             # Home Assistant
             hass_token=args.hass_token,
             hass_websocket_uri=args.hass_websocket_uri,
@@ -214,20 +196,12 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
         self.converter = AudioChunkConverter(rate=RATE, width=WIDTH, channels=CHANNELS)
 
         self.model_id: Optional[str] = None
+        self.model_train_dir: Optional[Path] = None
         self.state = state
-        self.transcribe_tasks: Dict[str, asyncio.Task] = {}
+        self.transcriber: Optional[KaldiNnet3WavTranscriber] = None
 
         settings = self.state.settings
-        self.streaming_audio_queues: Dict[str, asyncio.Queue[Optional[bytes]]] = {
-            lang_type: asyncio.Queue()
-            for lang_type, lang_settings in settings.transcriber_settings.items()
-            if lang_settings.is_streaming
-        }
-        self.wav_audio_buffers: Dict[str, bytes] = {
-            lang_type: bytes()
-            for lang_type, lang_settings in settings.transcriber_settings.items()
-            if not lang_settings.is_streaming
-        }
+        self.audio_buffer = bytes()
 
         # Audio
         self.volume_multiplier: Optional[float] = None
@@ -259,15 +233,6 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
         _LOGGER.debug("Client connected: %s", self.client_id)
 
-    async def _audio_stream(self, lang_type: str):
-        audio_queue = self.streaming_audio_queues[lang_type]
-        while True:
-            chunk = await audio_queue.get()
-            if not chunk:
-                break
-
-            yield chunk
-
     async def handle_event(self, event: Event) -> bool:
         if Describe.is_type(event.type):
             await self.write_event(self.get_info().event())
@@ -278,11 +243,16 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 _LOGGER.error("No model selected")
                 return False
 
-            # Cancel running tasks
-            for lang_type, transcribe_task in self.transcribe_tasks.values():
-                self.streaming_audio_queues[lang_type].put_nowait(None)
-                transcribe_task.cancel()
-            self.transcribe_tasks.clear()
+            self.model_train_dir = self.state.settings.train_dir / self.model_id
+            self.transcriber = KaldiNnet3WavTranscriber(
+                model_dir=self.state.settings.models_dir / self.model_id,
+                graph_dir=self.model_train_dir / "graph_arpa",
+                tools=KaldiTools.from_tools_dir(self.state.settings.tools_dir),
+                max_active=self.state.settings.max_active,
+                lattice_beam=self.state.settings.lattice_beam,
+                acoustic_scale=self.state.settings.acoustic_scale,
+                beam=self.state.settings.beam,
+            )
 
             if self.vad is not None:
                 # Reset VAD
@@ -294,52 +264,8 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 self.is_speech_started = False
                 self.speex_audio_buffer = bytes()
 
-            await self.state.transcribers_lock.acquire()
-            try:
-                transcribers = self.state.transcribers.get(self.model_id)
-                if transcribers is None:
-                    transcribers = {
-                        lang_type: KaldiTranscriber(
-                            model_dir=self.state.settings.models_dir
-                            / self.model_id
-                            / "model",
-                            graph_dir=self.state.settings.train_dir
-                            / self.model_id
-                            / f"graph_{lang_type}",
-                            kaldi_bin_dir=self.state.settings.tools_dir
-                            / "kaldi"
-                            / "bin",
-                            max_active=lang_settings.max_active,
-                            lattice_beam=lang_settings.lattice_beam,
-                            acoustic_scale=lang_settings.acoustic_scale,
-                            beam=lang_settings.beam,
-                        )
-                        for lang_type, lang_settings in self.state.settings.transcriber_settings.items()
-                    }
-                    self.state.transcribers[self.model_id] = transcribers
+            self.audio_buffer = bytes()
 
-                _LOGGER.debug("Starting transcribers")
-
-                # Clear queues
-                for audio_queue in self.streaming_audio_queues.values():
-                    while not audio_queue.empty():
-                        audio_queue.get_nowait()
-
-                # Clear WAV buffers
-                for lang_type in self.wav_audio_buffers:
-                    self.wav_audio_buffers[lang_type] = bytes()
-
-                self.transcribe_tasks = {
-                    lang_type: asyncio.create_task(
-                        transcribers[lang_type].transcribe_stream_async(
-                            self._audio_stream(lang_type), RATE, WIDTH, CHANNELS
-                        )
-                    )
-                    for lang_type in self.streaming_audio_queues
-                }
-            except Exception:
-                self.state.transcribers_lock.release()
-                raise
         elif AudioChunk.is_type(event.type):
             chunk = AudioChunk.from_event(event)
             chunk = self.converter.convert(chunk)
@@ -369,11 +295,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                         audio_to_transcribe = chunk.audio
 
                 if audio_to_transcribe:
-                    for audio_queue in self.streaming_audio_queues.values():
-                        audio_queue.put_nowait(audio_to_transcribe)
-
-                    for lang_type in self.wav_audio_buffers:
-                        self.wav_audio_buffers[lang_type] += audio_to_transcribe
+                    self.audio_buffer += audio_to_transcribe
             else:
                 # VAD
                 if self.before_speech_buffer is not None:
@@ -399,63 +321,41 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
         elif AudioStop.is_type(event.type):
             assert self.model_id
+            assert self.model_train_dir is not None
+            assert self.transcriber is not None
             start_time = time.monotonic()
 
-            try:
-                # Tell transcribers to stop
-                for lang_type in self.streaming_audio_queues:
-                    self.streaming_audio_queues[lang_type].put_nowait(None)
+            texts: List[str] = []
 
-                # Gather transcriptions
-                fut_to_lang_type: Dict[asyncio.Future, str] = {
-                    task: lang_type for lang_type, task in self.transcribe_tasks.items()
-                }
+            with tempfile.NamedTemporaryFile("wb+", suffix=".wav") as temp_file:
+                wav_path = temp_file.name
+                wav_file: wave.Wave_write = wave.open(wav_path, "wb")
+                with wav_file:
+                    wav_file.setframerate(RATE)
+                    wav_file.setsampwidth(WIDTH)
+                    wav_file.setnchannels(CHANNELS)
+                    wav_file.writeframes(self.audio_buffer)
 
-                with tempfile.TemporaryDirectory() as temp_dir:
-                    for lang_type, audio_buffer in self.wav_audio_buffers.items():
-                        wav_path = os.path.join(temp_dir, f"{lang_type}.wav")
-                        wav_file: wave.Wave_write = wave.open(wav_path, "wb")
-                        with wav_file:
-                            wav_file.setframerate(RATE)
-                            wav_file.setsampwidth(WIDTH)
-                            wav_file.setnchannels(CHANNELS)
-                            wav_file.writeframes(audio_buffer)
-
-                        if self.state.settings.arpa_rescore:
-                            # With rescoring
-                            task = asyncio.create_task(
-                                self.state.transcribers[self.model_id][
-                                    lang_type
-                                ].transcribe_wav_nnet3_rescore_async(
-                                    wav_path,
-                                    old_lang_dir=self.state.settings.train_dir
-                                    / self.model_id
-                                    / "data"
-                                    / f"lang_{ARPA}",
-                                    new_lang_dir=self.state.settings.train_dir
-                                    / self.model_id
-                                    / "data"
-                                    / f"lang_{ARPA_RESCORE}",
-                                    tools_dir=self.state.settings.tools_dir,
-                                    rescore_acoustic_scale=self.state.settings.arpa_rescore_acoustic_scale,
-                                )
-                            )
-                        else:
-                            # Without rescoring
-                            task = asyncio.create_task(
-                                self.state.transcribers[self.model_id][
-                                    lang_type
-                                ].transcribe_wav_async(wav_path)
-                            )
-
-                        fut_to_lang_type[task] = lang_type
-
-                    texts: Dict[str, str] = {}
-                    results = await asyncio.gather(*(fut_to_lang_type.keys()))
-                    for lang_type, result in zip(fut_to_lang_type.values(), results):
-                        texts[lang_type] = result or ""
-            finally:
-                self.state.transcribers_lock.release()
+                if self.state.settings.arpa_rescore:
+                    # With rescoring
+                    texts = await self.transcriber.async_transcribe_rescore(
+                        wav_path,
+                        old_lang_dir=self.state.settings.train_dir
+                        / self.model_id
+                        / "data"
+                        / "lang_arpa",
+                        new_lang_dir=self.state.settings.train_dir
+                        / self.model_id
+                        / "data"
+                        / "lang_arpa_rescore",
+                        rescore_acoustic_scale=self.state.settings.arpa_rescore_acoustic_scale,
+                        nbest=self.state.settings.nbest,
+                    )
+                else:
+                    # Without rescoring
+                    text = await self.transcriber.async_transcribe(wav_path)
+                    if text:
+                        texts = [text]
 
             _LOGGER.debug(
                 "Transcripts for client %s in %s second(s): %s",
@@ -465,58 +365,13 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             )
 
             text = ""
-            if len(texts) == 1:
-                # Only one choice
-                text = next(iter(texts.values()), "")
-            elif len(texts) > 1:
-                # Check ARPA against grammar
-                text_arpa, text_grammar = texts[ARPA].strip(), texts[GRAMMAR].strip()
-
-                if text_arpa == text_grammar:
-                    _LOGGER.debug("Exact match")
-                    text = text_grammar
-                elif text_arpa or text_grammar:
-                    skip_words = self.state.skip_words.get(self.model_id, [])
-                    words_arpa = text_arpa.split()
-                    words_grammar = text_grammar.split()
-                    distance = edit_distance(
-                        words_arpa, words_grammar, skip_words=skip_words
-                    )
-                    norm_distance = distance / max(len(words_arpa), len(words_grammar))
-                    if norm_distance < self.state.settings.word_norm_distance_threshold:
-                        _LOGGER.debug(
-                            "Word distance match: distance=%s, norm_distance=%s",
-                            distance,
-                            norm_distance,
-                        )
-                        text = text_grammar
-                    else:
-                        distance = edit_distance(text_arpa, text_grammar)
-                        norm_distance = distance / max(
-                            len(text_arpa), len(text_grammar)
-                        )
-                        if (
-                            norm_distance
-                            < self.state.settings.char_norm_distance_threshold
-                        ):
-                            _LOGGER.debug(
-                                "Character distance match: distance=%s, norm_distance=%s",
-                                distance,
-                                norm_distance,
-                            )
-                            text = text_grammar
-
-            # Get output text
-            with sqlite3.Connection(
-                self.state.settings.train_dir / self.model_id / "sentences.db"
-            ) as conn:
-                cur = conn.execute(
-                    "SELECT output FROM sentences WHERE input = ? LIMIT 1", (text,)
-                )
-                for row in cur:
-                    text = row[0].strip()
-                    _LOGGER.debug("Output text: %s", text)
-                    break
+            if texts:
+                best = get_matching_scores(texts, self.model_train_dir / "sentences.db")
+                best_text, best_score = best
+                if best_text:
+                    norm_score = best_score / len(best_text)
+                    if norm_score < self.state.settings.norm_distance_threshold:
+                        text = best_text
 
             await self.write_event(Transcript(text=text).event())
 

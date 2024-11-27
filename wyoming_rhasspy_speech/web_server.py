@@ -10,7 +10,6 @@ from collections.abc import Iterable
 from logging.handlers import QueueHandler
 from pathlib import Path
 from queue import Queue
-from threading import Thread
 from typing import Optional
 from urllib.request import urlopen
 
@@ -18,6 +17,7 @@ import rhasspy_speech
 from flask import Flask, Response, redirect, render_template, request
 from flask import url_for as flask_url_for
 from rhasspy_speech.g2p import LexiconDatabase, get_sounds_like, guess_pronunciations
+from rhasspy_speech.tools import KaldiTools
 from werkzeug.middleware.proxy_fix import ProxyFix
 from yaml import SafeDumper, safe_dump, safe_load
 
@@ -124,37 +124,28 @@ def get_app(state: AppState) -> Flask:
     async def api_train() -> Response:
         model_id = request.args["id"]
 
-        async with state.transcribers_lock:
-            state.transcribers.pop(model_id, None)
+        logger = logging.getLogger("rhasspy_speech")
+        logger.setLevel(logging.DEBUG)
+        log_queue = Queue()
+        handler = QueueHandler(log_queue)
+        logger.addHandler(handler)
+        text = "Training started\n"
 
-        def do_training():
-            logger = logging.getLogger("rhasspy_speech")
-            logger.setLevel(logging.DEBUG)
-            log_queue = Queue()
-            handler = QueueHandler(log_queue)
-            logger.addHandler(handler)
+        try:
+            await train_model(state, model_id, log_queue)
+            while True:
+                log_item = log_queue.get()
+                if log_item is None:
+                    break
 
-            try:
-                yield "Training started\n"
-                train_thread = Thread(
-                    target=train_model,
-                    args=(state, model_id, log_queue),
-                    daemon=True,
-                )
-                train_thread.start()
-                while True:
-                    log_item = log_queue.get()
-                    if log_item is None:
-                        break
+                text += log_item.getMessage() + "\n"
+            text += "Training complete\n"
+        except Exception as err:
+            text += f"ERROR: {err}"
+        finally:
+            logger.removeHandler(handler)
 
-                    yield log_item.getMessage() + "\n"
-                yield "Training complete\n"
-            except Exception as err:
-                yield f"ERROR: {err}"
-            finally:
-                logger.removeHandler(handler)
-
-        return Response(do_training(), content_type="text/plain")
+        return Response(text, content_type="text/plain")
 
     @app.route("/sentences", methods=["GET", "POST"])
     def sentences():
@@ -284,7 +275,7 @@ def get_app(state: AppState) -> Flask:
 # -----------------------------------------------------------------------------
 
 
-def train_model(state: AppState, model_id: str, log_queue: Queue):
+async def train_model(state: AppState, model_id: str, log_queue: Queue):
     try:
         _LOGGER.info("Training")
         start_time = time.monotonic()
@@ -292,15 +283,12 @@ def train_model(state: AppState, model_id: str, log_queue: Queue):
         state.settings.train_dir.mkdir(parents=True, exist_ok=True)
 
         language = model_id.split("-")[0].split("_")[0]
-        rhasspy_speech.train_model(
+        await rhasspy_speech.train_model(
             language=language,
             sentence_files=[sentences_path],
-            kaldi_dir=state.settings.tools_dir / "kaldi",
             model_dir=state.settings.models_dir / model_id,
             train_dir=state.settings.train_dir / model_id,
-            phonetisaurus_bin=state.settings.tools_dir / "phonetisaurus",
-            opengrm_dir=state.settings.tools_dir / "opengrm",
-            openfst_dir=state.settings.tools_dir / "openfst",
+            tools=KaldiTools.from_tools_dir(state.settings.tools_dir),
             rescore_order=None
             if (not state.settings.arpa_rescore)
             else state.settings.arpa_rescore_order,

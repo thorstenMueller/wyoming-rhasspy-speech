@@ -1,23 +1,6 @@
-import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
-
-from rhasspy_speech import KaldiTranscriber
-
-ARPA = "arpa"
-ARPA_RESCORE = "arpa_rescore"
-GRAMMAR = "grammar"
-LANG_TYPES = (ARPA, GRAMMAR)
-
-
-@dataclass
-class TranscriberSettings:
-    is_streaming: bool
-    max_active: int
-    lattice_beam: float
-    acoustic_scale: float
-    beam: float
 
 
 @dataclass
@@ -39,15 +22,18 @@ class AppSettings:
     speex_auto_gain: int
 
     # Edit distance
-    word_norm_distance_threshold: float
-    char_norm_distance_threshold: float
+    norm_distance_threshold: float
+
+    # Transcribers
+    max_active: int
+    lattice_beam: float
+    acoustic_scale: float
+    beam: float
+    nbest: int
 
     arpa_rescore: bool
     arpa_rescore_order: Optional[int]
     arpa_rescore_acoustic_scale: float
-
-    # Transcribers
-    transcriber_settings: Dict[str, TranscriberSettings] = field(default_factory=dict)
 
     # Home Assistant
     hass_token: Optional[str] = None
@@ -61,7 +47,3 @@ class AppState:
 
     # model_id -> words
     skip_words: Dict[str, List[str]] = field(default_factory=dict)
-
-    # model_id -> lang_type -> transcriber
-    transcribers: Dict[str, Dict[str, KaldiTranscriber]] = field(default_factory=dict)
-    transcribers_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
