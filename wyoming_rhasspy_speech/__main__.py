@@ -15,8 +15,10 @@ from typing import List, Optional
 from pyring_buffer import RingBuffer
 from pysilero_vad import SileroVoiceActivityDetector
 from pyspeex_noise import AudioProcessor as SpeexAudioProcessor
+from rhasspy_speech.const import LangSuffix
 from rhasspy_speech.intent_fst import get_matching_scores
 from rhasspy_speech.tools import KaldiTools
+from rhasspy_speech.transcribe_stream import KaldiNnet3StreamTranscriber
 from rhasspy_speech.transcribe_wav import KaldiNnet3WavTranscriber
 from wyoming.asr import Transcribe, Transcript
 from wyoming.audio import AudioChunk, AudioChunkConverter, AudioStart, AudioStop
@@ -75,8 +77,8 @@ async def main() -> None:
     parser.add_argument(
         "--vad-threshold",
         type=float,
-        default=0.9,
-        help="Threshold for VAD (default: 0.9)",
+        default=0.5,
+        help="Threshold for VAD (default: 0.5)",
     )
     parser.add_argument(
         "--before-speech-seconds",
@@ -105,13 +107,17 @@ async def main() -> None:
     # Transcribers
     parser.add_argument("--max-active", type=int, default=7000)
     parser.add_argument("--lattice-beam", type=float, default=8.0)
-    parser.add_argument("--acoustic-scale", type=float, default=1.0)
+    parser.add_argument("--acoustic-scale", type=float, default=0.5)
     parser.add_argument("--beam", type=float, default=24.0)
     parser.add_argument("--nbest", type=int, default=5)
+    parser.add_argument("--streaming", action="store_true")
     #
-    parser.add_argument("--arpa-rescore", action="store_true")
+    parser.add_argument(
+        "--decode-mode",
+        choices=("grammar", "arpa", "arpa_rescore"),
+        default="arpa",
+    )
     parser.add_argument("--arpa-rescore-order", type=int, default=5)
-    parser.add_argument("--arpa-rescore-acoustic-scale", type=float, default=0.5)
     #
     parser.add_argument("--debug", action="store_true", help="Log DEBUG messages")
     args = parser.parse_args()
@@ -142,10 +148,10 @@ async def main() -> None:
             acoustic_scale=args.acoustic_scale,
             beam=args.beam,
             nbest=args.nbest,
+            streaming=args.streaming,
             #
-            arpa_rescore=args.arpa_rescore,
+            decode_mode=LangSuffix(args.decode_mode),
             arpa_rescore_order=args.arpa_rescore_order,
-            arpa_rescore_acoustic_scale=args.arpa_rescore_acoustic_scale,
             # Home Assistant
             hass_token=args.hass_token,
             hass_websocket_uri=args.hass_websocket_uri,
@@ -199,9 +205,23 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
         self.model_train_dir: Optional[Path] = None
         self.state = state
         self.transcriber: Optional[KaldiNnet3WavTranscriber] = None
+        self.transcribe_task: Optional[asyncio.Task] = None
 
         settings = self.state.settings
+
+        self.is_streaming = self.state.settings.streaming
+        if self.state.settings.decode_mode == LangSuffix.GRAMMAR:
+            # Strict grammar
+            self.graph_dir_name = "graph_grammar"
+        else:
+            # Language model
+            self.graph_dir_name = "graph_arpa"
+
+        # Non-streaming
         self.audio_buffer = bytes()
+
+        # Streaming
+        self.audio_queue: "asyncio.Queue[Optional[bytes]]" = asyncio.Queue()
 
         # Audio
         self.volume_multiplier: Optional[float] = None
@@ -244,15 +264,57 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 return False
 
             self.model_train_dir = self.state.settings.train_dir / self.model_id
-            self.transcriber = KaldiNnet3WavTranscriber(
-                model_dir=self.state.settings.models_dir / self.model_id,
-                graph_dir=self.model_train_dir / "graph_arpa",
-                tools=KaldiTools.from_tools_dir(self.state.settings.tools_dir),
-                max_active=self.state.settings.max_active,
-                lattice_beam=self.state.settings.lattice_beam,
-                acoustic_scale=self.state.settings.acoustic_scale,
-                beam=self.state.settings.beam,
-            )
+
+            # Empty queue
+            while not self.audio_queue.empty():
+                self.audio_queue.get_nowait()
+
+            if self.is_streaming:
+                # Streaming audio
+                transcriber = KaldiNnet3StreamTranscriber(
+                    model_dir=self.state.settings.models_dir / self.model_id,
+                    graph_dir=self.model_train_dir / self.graph_dir_name,
+                    tools=KaldiTools.from_tools_dir(self.state.settings.tools_dir),
+                    max_active=self.state.settings.max_active,
+                    lattice_beam=self.state.settings.lattice_beam,
+                    acoustic_scale=self.state.settings.acoustic_scale,
+                    beam=self.state.settings.beam,
+                )
+
+                if self.state.settings.decode_mode == LangSuffix.ARPA_RESCORE:
+                    # Streaming with rescoring
+                    self.transcribe_task = asyncio.create_task(
+                        transcriber.async_transcribe_rescore(
+                            self.audio_stream(),
+                            old_lang_dir=self.state.settings.train_dir
+                            / self.model_id
+                            / "data"
+                            / "lang_arpa",
+                            new_lang_dir=self.state.settings.train_dir
+                            / self.model_id
+                            / "data"
+                            / "lang_arpa_rescore",
+                            nbest=self.state.settings.nbest,
+                        )
+                    )
+                else:
+                    # Streaming without rescoring
+                    self.transcribe_task = asyncio.create_task(
+                        transcriber.async_transcribe(
+                            self.audio_stream(), nbest=self.state.settings.nbest
+                        )
+                    )
+            else:
+                # Non-streaming
+                self.transcriber = KaldiNnet3WavTranscriber(
+                    model_dir=self.state.settings.models_dir / self.model_id,
+                    graph_dir=self.model_train_dir / self.graph_dir_name,
+                    tools=KaldiTools.from_tools_dir(self.state.settings.tools_dir),
+                    max_active=self.state.settings.max_active,
+                    lattice_beam=self.state.settings.lattice_beam,
+                    acoustic_scale=self.state.settings.acoustic_scale,
+                    beam=self.state.settings.beam,
+                )
 
             if self.vad is not None:
                 # Reset VAD
@@ -295,7 +357,10 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                         audio_to_transcribe = chunk.audio
 
                 if audio_to_transcribe:
-                    self.audio_buffer += audio_to_transcribe
+                    if self.is_streaming:
+                        self.audio_queue.put_nowait(audio_to_transcribe)
+                    else:
+                        self.audio_buffer += audio_to_transcribe
             else:
                 # VAD
                 if self.before_speech_buffer is not None:
@@ -322,40 +387,48 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
         elif AudioStop.is_type(event.type):
             assert self.model_id
             assert self.model_train_dir is not None
-            assert self.transcriber is not None
-            start_time = time.monotonic()
 
+            start_time = time.monotonic()
             texts: List[str] = []
 
-            with tempfile.NamedTemporaryFile("wb+", suffix=".wav") as temp_file:
-                wav_path = temp_file.name
-                wav_file: wave.Wave_write = wave.open(wav_path, "wb")
-                with wav_file:
-                    wav_file.setframerate(RATE)
-                    wav_file.setsampwidth(WIDTH)
-                    wav_file.setnchannels(CHANNELS)
-                    wav_file.writeframes(self.audio_buffer)
+            if self.is_streaming:
+                assert self.transcribe_task is not None
 
-                if self.state.settings.arpa_rescore:
-                    # With rescoring
-                    texts = await self.transcriber.async_transcribe_rescore(
-                        wav_path,
-                        old_lang_dir=self.state.settings.train_dir
-                        / self.model_id
-                        / "data"
-                        / "lang_arpa",
-                        new_lang_dir=self.state.settings.train_dir
-                        / self.model_id
-                        / "data"
-                        / "lang_arpa_rescore",
-                        rescore_acoustic_scale=self.state.settings.arpa_rescore_acoustic_scale,
-                        nbest=self.state.settings.nbest,
-                    )
-                else:
-                    # Without rescoring
-                    text = await self.transcriber.async_transcribe(wav_path)
-                    if text:
-                        texts = [text]
+                # End stream and get transcript(s)
+                self.audio_queue.put_nowait(None)
+                texts = await self.transcribe_task
+                self.transcribe_task = None
+            else:
+                assert self.transcriber is not None
+
+                with tempfile.NamedTemporaryFile("wb+", suffix=".wav") as temp_file:
+                    wav_path = temp_file.name
+                    wav_writer: wave.Wave_write = wave.open(wav_path, "wb")
+                    with wav_writer:
+                        wav_writer.setframerate(16000)
+                        wav_writer.setsampwidth(2)
+                        wav_writer.setnchannels(1)
+                        wav_writer.writeframes(self.audio_buffer)
+
+                    if self.state.settings.decode_mode == LangSuffix.ARPA_RESCORE:
+                        texts = await self.transcriber.async_transcribe_rescore(
+                            wav_path,
+                            old_lang_dir=self.state.settings.train_dir
+                            / self.model_id
+                            / "data"
+                            / "lang_arpa",
+                            new_lang_dir=self.state.settings.train_dir
+                            / self.model_id
+                            / "data"
+                            / "lang_arpa_rescore",
+                            nbest=self.state.settings.nbest,
+                        )
+                    else:
+                        texts = await self.transcriber.async_transcribe(
+                            wav_path, nbest=self.state.settings.nbest
+                        )
+
+                    self.transcriber = None
 
             _LOGGER.debug(
                 "Transcripts for client %s in %s second(s): %s",
@@ -393,6 +466,14 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             _LOGGER.debug("Unexpected event: type=%s, data=%s", event.type, event.data)
 
         return True
+
+    async def audio_stream(self):
+        while True:
+            chunk = await self.audio_queue.get()
+            if chunk is None:
+                break
+
+            yield chunk
 
     async def disconnect(self) -> None:
         _LOGGER.debug("Client disconnected: %s", self.client_id)

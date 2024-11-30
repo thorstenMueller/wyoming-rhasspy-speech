@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from rhasspy_speech.const import LangSuffix
+
 
 @dataclass
 class AppSettings:
@@ -30,10 +32,10 @@ class AppSettings:
     acoustic_scale: float
     beam: float
     nbest: int
+    streaming: bool
 
-    arpa_rescore: bool
+    decode_mode: LangSuffix
     arpa_rescore_order: Optional[int]
-    arpa_rescore_acoustic_scale: float
 
     # Home Assistant
     hass_token: Optional[str] = None

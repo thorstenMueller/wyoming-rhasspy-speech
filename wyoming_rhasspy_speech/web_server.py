@@ -6,18 +6,19 @@ import shutil
 import tarfile
 import tempfile
 import time
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from logging.handlers import QueueHandler
 from pathlib import Path
 from queue import Queue
 from typing import Optional
 from urllib.request import urlopen
 
-import rhasspy_speech
 from flask import Flask, Response, redirect, render_template, request
 from flask import url_for as flask_url_for
+from rhasspy_speech.const import LangSuffix
 from rhasspy_speech.g2p import LexiconDatabase, get_sounds_like, guess_pronunciations
 from rhasspy_speech.tools import KaldiTools
+from rhasspy_speech.train import train_model as rhasspy_train_model
 from werkzeug.middleware.proxy_fix import ProxyFix
 from yaml import SafeDumper, safe_dump, safe_load
 
@@ -126,7 +127,7 @@ def get_app(state: AppState) -> Flask:
 
         logger = logging.getLogger("rhasspy_speech")
         logger.setLevel(logging.DEBUG)
-        log_queue = Queue()
+        log_queue: "Queue[Optional[logging.LogRecord]]" = Queue()
         handler = QueueHandler(log_queue)
         logger.addHandler(handler)
         text = "Training started\n"
@@ -282,16 +283,23 @@ async def train_model(state: AppState, model_id: str, log_queue: Queue):
         sentences_path = state.settings.train_dir / model_id / "sentences.yaml"
         state.settings.train_dir.mkdir(parents=True, exist_ok=True)
 
+        lang_suffixes: Collection[LangSuffix]
+        if state.settings.decode_mode == "grammar":
+            lang_suffixes = (LangSuffix.GRAMMAR,)
+        elif state.settings.decode_mode == "arpa_rescore":
+            lang_suffixes = (LangSuffix.ARPA, LangSuffix.ARPA_RESCORE)
+        else:
+            lang_suffixes = (LangSuffix.ARPA,)
+
         language = model_id.split("-")[0].split("_")[0]
-        await rhasspy_speech.train_model(
+        await rhasspy_train_model(
             language=language,
             sentence_files=[sentences_path],
             model_dir=state.settings.models_dir / model_id,
             train_dir=state.settings.train_dir / model_id,
             tools=KaldiTools.from_tools_dir(state.settings.tools_dir),
-            rescore_order=None
-            if (not state.settings.arpa_rescore)
-            else state.settings.arpa_rescore_order,
+            lang_suffixes=lang_suffixes,
+            rescore_order=state.settings.arpa_rescore_order,
         )
         _LOGGER.debug(
             "Training completed in %s second(s)", time.monotonic() - start_time
