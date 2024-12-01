@@ -109,7 +109,7 @@ async def main() -> None:
     parser.add_argument("--lattice-beam", type=float, default=8.0)
     parser.add_argument("--acoustic-scale", type=float, default=0.5)
     parser.add_argument("--beam", type=float, default=24.0)
-    parser.add_argument("--nbest", type=int, default=5)
+    parser.add_argument("--nbest", type=int, default=3)
     parser.add_argument("--streaming", action="store_true")
     #
     parser.add_argument(
@@ -439,12 +439,14 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
             text = ""
             if texts:
-                best = get_matching_scores(texts, self.model_train_dir / "sentences.db")
-                best_text, best_score = best
-                if best_text:
-                    norm_score = best_score / len(best_text)
-                    if norm_score < self.state.settings.norm_distance_threshold:
-                        text = best_text
+                best = get_matching_scores(
+                    texts,
+                    self.model_train_dir / "sentences.db",
+                    norm_distance_threshold=self.state.settings.norm_distance_threshold,
+                )
+                if best is not None:
+                    _LOGGER.debug("Best match: %s", best)
+                    text = best[0]
 
             await self.write_event(Transcript(text=text).event())
 
