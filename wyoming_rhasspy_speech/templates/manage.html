@@ -11,9 +11,29 @@
 <div class="row">
   <table class="table table-bordered">
     <tbody>
+      {% if suffixes: %}
       <tr>
         <td>
-          <a href="{{ url_for('sentences', id=model_id) }}" class="btn btn-success">Edit Sentences</a>
+          <select onchange="window.location.href=this.value">
+            {% if suffix: %}
+            <option value="{{ url_for('manage', id=model_id) }}">Default</option>
+            <option value="{{ url_for('manage', id=model_id, suffix=suffix) }}" selected>{{ suffix }}</option>
+            {% else: %}
+            <option value="" selected>Default</option>
+            {% endif %}
+            {% for other_suffix in suffixes: %}
+            {% if suffix != other_suffix: %}
+            <option value="{{ url_for('manage', id=model_id, suffix=other_suffix) }}">{{ other_suffix }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+        </td>
+        <td>Change sub-model</td>
+      </tr>
+      {% endif %}
+      <tr>
+        <td>
+          <a href="{{ url_for('sentences', id=model_id, suffix=suffix) }}" class="btn btn-success">Edit Sentences</a>
         </td>
         <td>Change the possible sentences you can speak.</td>
       </tr>
@@ -41,7 +61,7 @@
       const log = document.getElementById("log");
       log.value = "";
 
-      const response = await fetch("{{ url_for('api_train', id=model_id) }}", {method:"post"});
+      const response = await fetch("{{ url_for('api_train', id=model_id, suffix=suffix) | safe }}", {method:"post"});
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
 

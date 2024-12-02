@@ -3,14 +3,14 @@ import argparse
 import array
 import asyncio
 import logging
-import re
 import tempfile
 import time
 import wave
+from collections import defaultdict
 from functools import partial
 from pathlib import Path
 from threading import Thread
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from pyring_buffer import RingBuffer
 from pysilero_vad import SileroVoiceActivityDetector
@@ -202,7 +202,9 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
         self.converter = AudioChunkConverter(rate=RATE, width=WIDTH, channels=CHANNELS)
 
         self.model_id: Optional[str] = None
+        self.model_suffix: Optional[str] = None
         self.model_train_dir: Optional[Path] = None
+        self.model_data_dir: Optional[Path] = None
         self.state = state
         self.transcriber: Optional[KaldiNnet3WavTranscriber] = None
         self.transcribe_task: Optional[asyncio.Task] = None
@@ -263,7 +265,10 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                 _LOGGER.error("No model selected")
                 return False
 
-            self.model_train_dir = self.state.settings.train_dir / self.model_id
+            self.model_train_dir = self.state.settings.model_train_dir(
+                self.model_id, self.model_suffix
+            )
+            self.model_data_dir = self.state.settings.model_data_dir(self.model_id)
 
             # Empty queue
             while not self.audio_queue.empty():
@@ -272,7 +277,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             if self.is_streaming:
                 # Streaming audio
                 transcriber = KaldiNnet3StreamTranscriber(
-                    model_dir=self.state.settings.models_dir / self.model_id,
+                    model_dir=self.model_data_dir,
                     graph_dir=self.model_train_dir / self.graph_dir_name,
                     tools=KaldiTools.from_tools_dir(self.state.settings.tools_dir),
                     max_active=self.state.settings.max_active,
@@ -286,12 +291,8 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                     self.transcribe_task = asyncio.create_task(
                         transcriber.async_transcribe_rescore(
                             self.audio_stream(),
-                            old_lang_dir=self.state.settings.train_dir
-                            / self.model_id
-                            / "data"
-                            / "lang_arpa",
-                            new_lang_dir=self.state.settings.train_dir
-                            / self.model_id
+                            old_lang_dir=self.model_train_dir / "data" / "lang_arpa",
+                            new_lang_dir=self.model_train_dir
                             / "data"
                             / "lang_arpa_rescore",
                             nbest=self.state.settings.nbest,
@@ -307,7 +308,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             else:
                 # Non-streaming
                 self.transcriber = KaldiNnet3WavTranscriber(
-                    model_dir=self.state.settings.models_dir / self.model_id,
+                    model_dir=self.model_data_dir,
                     graph_dir=self.model_train_dir / self.graph_dir_name,
                     tools=KaldiTools.from_tools_dir(self.state.settings.tools_dir),
                     max_active=self.state.settings.max_active,
@@ -387,6 +388,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
         elif AudioStop.is_type(event.type):
             assert self.model_id
             assert self.model_train_dir is not None
+            assert self.model_data_dir is not None
 
             start_time = time.monotonic()
             texts: List[str] = []
@@ -413,12 +415,8 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                     if self.state.settings.decode_mode == LangSuffix.ARPA_RESCORE:
                         texts = await self.transcriber.async_transcribe_rescore(
                             wav_path,
-                            old_lang_dir=self.state.settings.train_dir
-                            / self.model_id
-                            / "data"
-                            / "lang_arpa",
-                            new_lang_dir=self.state.settings.train_dir
-                            / self.model_id
+                            old_lang_dir=self.model_train_dir / "data" / "lang_arpa",
+                            new_lang_dir=self.model_train_dir
                             / "data"
                             / "lang_arpa_rescore",
                             nbest=self.state.settings.nbest,
@@ -441,7 +439,9 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             if texts:
                 best = get_matching_scores(
                     texts,
-                    self.model_train_dir / "sentences.db",
+                    self.state.settings.sentences_db_path(
+                        self.model_id, self.model_suffix
+                    ),
                     norm_distance_threshold=self.state.settings.norm_distance_threshold,
                 )
                 if best is not None:
@@ -452,9 +452,19 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
             return True
         elif Transcribe.is_type(event.type):
+            self.model_id, self.model_suffix = None, None
+            self.model_data_dir = None
+            self.model_train_dir = None
+
             transcribe = Transcribe.from_event(event)
+            _LOGGER.debug(transcribe)
+
             if transcribe.name:
-                self.model_id = transcribe.name
+                name_parts = transcribe.name.split("/", maxsplit=1)
+                if len(name_parts) == 2:
+                    self.model_id, self.model_suffix = name_parts
+                else:
+                    self.model_id, self.model_suffix = transcribe.name, None
             elif transcribe.language:
                 for model in sorted(
                     self.get_info().asr[0].models,
@@ -481,36 +491,43 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
         _LOGGER.debug("Client disconnected: %s", self.client_id)
 
     def get_info(self) -> Info:
-        models: List[AsrModel] = []
+        # [(model_id, suffix)]
+        trained_models: List[Tuple[str, Optional[str]]] = []
+
         for model_dir in self.state.settings.models_dir.iterdir():
             if not model_dir.is_dir():
                 continue
 
             model_id = model_dir.name
-            trained_model_dir = self.state.settings.train_dir / model_id
-            if not trained_model_dir.is_dir():
-                _LOGGER.warning("Skipping model %s (not trained)", model_id)
-                continue
+            trained_model_dir = self.state.settings.model_train_dir(model_id)
+            if trained_model_dir.is_dir():
+                trained_models.append((model_id, None))
 
-            language = model_id.split("-")[0]
-            models.append(
-                AsrModel(
-                    name=model_id,
-                    description=model_id,
-                    attribution=Attribution(name="", url=""),
-                    installed=True,
-                    version=None,
-                    languages=[language],
+            suffixes = self.state.settings.get_suffixes(model_id)
+            for suffix in suffixes:
+                trained_model_dir = self.state.settings.model_train_dir(
+                    model_id, suffix
                 )
-            )
+                if trained_model_dir.is_dir():
+                    trained_models.append((model_id, suffix))
 
-        if not models:
+        if not trained_models:
             _LOGGER.warning("No trained models found.")
+
+        # program -> language -> (model_id, suffix)
+        language_support = defaultdict(dict)
+        for model_id, suffix in trained_models:
+            # en_US-rhasspy -> rhasspy
+            language, program = model_id.split("-", maxsplit=1)
+            if suffix:
+                program = f"{program}-{suffix}"
+
+            language_support[program][language] = (model_id, suffix)
 
         return Info(
             asr=[
                 AsrProgram(
-                    name="rhasspy-speech",
+                    name=program,
                     description="A fixed input speech-to-text system based on Kaldi",
                     attribution=Attribution(
                         name="synesthesiam",
@@ -518,20 +535,23 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                     ),
                     installed=True,
                     version="1.0.0",
-                    models=models,
+                    models=[
+                        AsrModel(
+                            name=model_id
+                            if (suffix is None)
+                            else f"{model_id}/{suffix}",
+                            description=model_id,
+                            attribution=Attribution(name="", url=""),
+                            installed=True,
+                            version=None,
+                            languages=[language],
+                        )
+                        for language, (model_id, suffix) in languages.items()
+                    ],
                 )
+                for program, languages in language_support.items()
             ],
         )
-
-
-def remove_skip_word(text: str, skip_word: str) -> str:
-    skip_word_pattern = re.compile(
-        r"(?<=\W)(" + re.escape(skip_word) + r")(?=\W)",
-        re.IGNORECASE,
-    )
-    text = skip_word_pattern.sub(" ", f" {text} ").strip()
-    text = re.sub(r"\s+", " ", text)
-    return text
 
 
 def multiply_volume(chunk: bytes, volume_multiplier: float) -> bytes:

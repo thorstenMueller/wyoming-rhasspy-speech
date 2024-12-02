@@ -66,9 +66,15 @@ def get_app(state: AppState) -> Flask:
     @app.route("/manage")
     def manage():
         model_id = request.args["id"]
-        sentences_path = state.settings.train_dir / model_id / "sentences.yaml"
+        suffix = request.args.get("suffix")
+
+        sentences_path = state.settings.sentences_path(model_id, suffix)
         return render_template(
-            "manage.html", model_id=model_id, has_sentences=sentences_path.exists()
+            "manage.html",
+            model_id=model_id,
+            suffix=suffix,
+            suffixes=state.settings.get_suffixes(model_id),
+            has_sentences=sentences_path.exists(),
         )
 
     @app.route("/download")
@@ -124,6 +130,7 @@ def get_app(state: AppState) -> Flask:
     @app.route("/api/train", methods=["POST"])
     async def api_train() -> Response:
         model_id = request.args["id"]
+        suffix = request.args.get("suffix")
 
         logger = logging.getLogger("rhasspy_speech")
         logger.setLevel(logging.DEBUG)
@@ -133,7 +140,7 @@ def get_app(state: AppState) -> Flask:
         text = "Training started\n"
 
         try:
-            await train_model(state, model_id, log_queue)
+            await train_model(state, model_id, suffix, log_queue)
             while True:
                 log_item = log_queue.get()
                 if log_item is None:
@@ -151,8 +158,9 @@ def get_app(state: AppState) -> Flask:
     @app.route("/sentences", methods=["GET", "POST"])
     def sentences():
         model_id = request.args["id"]
+        suffix = request.args.get("suffix")
         sentences = ""
-        sentences_path = state.settings.train_dir / model_id / "sentences.yaml"
+        sentences_path = state.settings.sentences_path(model_id, suffix)
 
         if request.method == "POST":
             sentences = request.form["sentences"]
@@ -166,12 +174,12 @@ def get_app(state: AppState) -> Flask:
                 sentences_path.parent.mkdir(parents=True, exist_ok=True)
                 sentences_path.write_text(sentences, encoding="utf-8")
 
-                state.skip_words[model_id] = sentences_dict.get("skip_words", [])
-
                 if state.settings.hass_ingress:
-                    return redirect(ingress_url_for("manage", id=model_id))
+                    return redirect(
+                        ingress_url_for("manage", id=model_id, suffix=suffix)
+                    )
 
-                return redirect(flask_url_for("manage", id=model_id))
+                return redirect(flask_url_for("manage", id=model_id, suffix=suffix))
             except Exception as err:
                 return render_template(
                     "sentences.html",
@@ -183,16 +191,20 @@ def get_app(state: AppState) -> Flask:
         elif sentences_path.exists():
             sentences = sentences_path.read_text(encoding="utf-8")
 
-        return render_template("sentences.html", model_id=model_id, sentences=sentences)
+        return render_template(
+            "sentences.html", model_id=model_id, suffix=suffix, sentences=sentences
+        )
 
     @app.route("/delete", methods=["GET", "POST"])
     def delete():
         model_id = request.args["id"]
-        model_data_dir = state.settings.models_dir / model_id
+        suffix = request.args.get("suffix")
+
+        model_data_dir = state.settings.model_data_dir(model_id)
         if model_data_dir.is_dir():
             shutil.rmtree(model_data_dir)
 
-        model_train_dir = state.settings.train_dir / model_id
+        model_train_dir = state.settings.model_train_dir(model_id, suffix)
         if model_train_dir.is_dir():
             shutil.rmtree(model_train_dir)
 
@@ -276,12 +288,15 @@ def get_app(state: AppState) -> Flask:
 # -----------------------------------------------------------------------------
 
 
-async def train_model(state: AppState, model_id: str, log_queue: Queue):
+async def train_model(
+    state: AppState, model_id: str, suffix: Optional[str], log_queue: Queue
+):
     try:
-        _LOGGER.info("Training")
+        _LOGGER.info("Training %s (suffix=%s)", model_id, suffix)
         start_time = time.monotonic()
-        sentences_path = state.settings.train_dir / model_id / "sentences.yaml"
-        state.settings.train_dir.mkdir(parents=True, exist_ok=True)
+        sentences_path = state.settings.sentences_path(model_id, suffix)
+        model_train_dir = state.settings.model_train_dir(model_id, suffix)
+        model_train_dir.mkdir(parents=True, exist_ok=True)
 
         lang_suffixes: Collection[LangSuffix]
         if state.settings.decode_mode == "grammar":
@@ -296,7 +311,7 @@ async def train_model(state: AppState, model_id: str, log_queue: Queue):
             language=language,
             sentence_files=[sentences_path],
             model_dir=state.settings.models_dir / model_id,
-            train_dir=state.settings.train_dir / model_id,
+            train_dir=model_train_dir,
             tools=KaldiTools.from_tools_dir(state.settings.tools_dir),
             lang_suffixes=lang_suffixes,
             rescore_order=state.settings.arpa_rescore_order,

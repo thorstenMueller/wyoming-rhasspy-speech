@@ -1,6 +1,6 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 from rhasspy_speech.const import LangSuffix
 
@@ -42,10 +42,42 @@ class AppSettings:
     hass_websocket_uri: str = "homeassistant.local"
     hass_ingress: bool = False
 
+    def model_data_dir(self, model_id: str) -> Path:
+        return self.models_dir / model_id
+
+    def model_train_dir(self, model_id: str, suffix: Optional[str] = None) -> Path:
+        if suffix:
+            dirname = f"training_{suffix}"
+        else:
+            dirname = "training"
+
+        return self.train_dir / model_id / dirname
+
+    def sentences_path(self, model_id: str, suffix: Optional[str] = None) -> Path:
+        if suffix:
+            filename = f"sentences_{suffix}.yaml"
+        else:
+            filename = "sentences.yaml"
+
+        return self.train_dir / model_id / filename
+
+    def sentences_db_path(self, model_id: str, suffix: Optional[str] = None) -> Path:
+        return self.model_train_dir(model_id, suffix) / "sentences.db"
+
+    def get_suffixes(self, model_id: str) -> List[str]:
+        suffixes: List[str] = []
+        for sentences_path in (self.train_dir / model_id).glob("sentences*.yaml"):
+            if not sentences_path.is_file():
+                continue
+
+            # sentences_{suffix}.yaml
+            name_parts = sentences_path.stem.split("_", maxsplit=1)
+            if len(name_parts) == 2:
+                suffixes.append(name_parts[1])
+
+        return suffixes
+
 
 @dataclass
 class AppState:
     settings: AppSettings
-
-    # model_id -> words
-    skip_words: Dict[str, List[str]] = field(default_factory=dict)
