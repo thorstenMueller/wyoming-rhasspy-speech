@@ -16,7 +16,6 @@ from pyring_buffer import RingBuffer
 from pysilero_vad import SileroVoiceActivityDetector
 from pyspeex_noise import AudioProcessor as SpeexAudioProcessor
 from rhasspy_speech.const import LangSuffix
-from rhasspy_speech.intent_fst import get_matching_scores
 from rhasspy_speech.tools import KaldiTools
 from rhasspy_speech.transcribe_stream import KaldiNnet3StreamTranscriber
 from rhasspy_speech.transcribe_wav import KaldiNnet3WavTranscriber
@@ -109,7 +108,7 @@ async def main() -> None:
     parser.add_argument("--lattice-beam", type=float, default=8.0)
     parser.add_argument("--acoustic-scale", type=float, default=0.5)
     parser.add_argument("--beam", type=float, default=24.0)
-    parser.add_argument("--nbest", type=int, default=3)
+    parser.add_argument("--nbest", type=int, default=1)
     parser.add_argument("--streaming", action="store_true")
     #
     parser.add_argument(
@@ -437,16 +436,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
             text = ""
             if texts:
-                best = get_matching_scores(
-                    texts,
-                    self.state.settings.sentences_db_path(
-                        self.model_id, self.model_suffix
-                    ),
-                    norm_distance_threshold=self.state.settings.norm_distance_threshold,
-                )
-                if best is not None:
-                    _LOGGER.debug("Best match: %s", best)
-                    text = best[0]
+                text = texts[0]
 
             await self.write_event(Transcript(text=text).event())
 

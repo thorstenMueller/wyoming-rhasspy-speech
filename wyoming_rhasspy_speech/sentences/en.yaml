@@ -1,0 +1,270 @@
+language: en
+
+lists:
+  color:
+    values:
+      - "white"
+      - "black"
+      - "red"
+      - "orange"
+      - "yellow"
+      - "green"
+      - "blue"
+      - "purple"
+      - "brown"
+      - "pink"
+      - "turquoise"
+  brightness:
+    range:
+      type: "percentage"
+      from: 5
+      to: 100
+      step: 5
+
+  # TODO
+  name:
+    values:
+      - in: Front Door
+        context:
+          domain: lock
+      - in: Kitchen Door
+        context:
+          domain: lock
+      - in: Poorly Installed Door
+        context:
+          domain: lock
+      - in: Openable Lock
+        context:
+          domain: lock
+      - in: Humidifier
+        context:
+          domain: humidifier
+      - in: Dehumidifier
+        context:
+          domain: humidifier
+      - in: Hygrostat
+        context:
+          domain: humidifier
+      - in: Demo Water Heater
+        context:
+          domain: water_heater
+      - in: Demo Water Heater Celsius
+        context:
+          domain: water_heater
+      - in: Pergola Roof
+        context:
+          domain: cover
+      - in: Heat pump
+        context:
+          domain: climate
+      - in: Hvac
+        context:
+          domain: climate
+      - in: Ecobee
+        context:
+          domain: climate
+      - in: light
+        context:
+          domain: light
+      - in: Bed Light
+        context:
+          domain: light
+      - in: light in the bedroom
+        context:
+          domain: light
+      - in: Ceiling lights
+        context:
+          domain: light
+      - in: Kitchen Lights
+        context:
+          domain: light
+      - in: overhead light
+        context:
+          domain: light
+      - in: Ceiling lights
+        context:
+          domain: light
+      - in: Living Room Lights
+        context:
+          domain: light
+      - in: Entrance Color + White Lights
+        context:
+          domain: light
+      - in: Outside Temperature
+        context:
+          domain: sensor
+      - in: Outside Humidity
+        context:
+          domain: sensor
+      - in: Kitchen Window
+        context:
+          domain: cover
+      - in: Hall Window
+        context:
+          domain: cover
+      - in: Living Room Window
+        context:
+          domain: cover
+      - in: Garage Door
+        context:
+          domain: cover
+      - in: Living Room Fan
+        context:
+          domain: fan
+      - in: Ceiling Fan
+        context:
+          domain: fan
+      - in: Percentage Full Fan
+        context:
+          domain: fan
+      - in: Percentage Limited Fan
+        context:
+          domain: fan
+      - in: Preset Only Limited Fan
+        context:
+          domain: fan
+      - in: Decorative Lights
+        context:
+          domain: switch
+      - in: AC
+        context:
+          domain: switch
+      - in: Media Player
+        context:
+          domain: media_player
+      - in: Shopping List
+        context:
+          domain: todo
+      - in: Downstairs TV
+        context:
+          domain: media_player
+      - in: Family Room TV
+        context:
+          domain: media_player
+      - in: Demo Weather South
+        context:
+          domain: weather
+      - in: Liste des courses
+        context:
+          domain: todo
+      - in: Todo List 1
+        context:
+          domain: todo
+      - in: party time
+        context:
+          domain: scene
+  area:
+    values:
+      - Living Room
+      - Kitchen
+      - cuisine
+      - Bedroom
+      - Garage
+      - Entrance
+      - Office
+      - Basement
+      - Test Area
+  floor:
+    values:
+      - First floor
+      - ground
+      - Second floor
+
+intents:
+  # date, time, weather
+  HassGetCurrentTime:
+    data:
+      - sentences:
+          - "(what's|what is) the time [[right ]now]"
+          - "what time is it [[right ]now]"
+  HassGetCurrentDate:
+    data:
+      - sentences:
+          - "(what's|what is) the date [today]"
+          - "(what's|what is) today's date"
+  HassGetWeather:
+    data:
+      - sentences:
+          - "(what's|what is) the weather [like]"
+      - sentences:
+          - "(what's|what is) the {name} weather [like]"
+          - "(what's|what is) the weather [like] in {name}"
+        requires_context:
+          domain: weather
+
+  # turn on/off
+  # open/close
+  # lock/unlock
+  HassTurnOn:
+    data:
+      # turn on
+      - sentences:
+          - "turn on [the] lights"
+
+      - sentences:
+          - "turn on [the] {name}"
+          - "turn on [the] {name} in [the] {area}"
+          - "turn on [the] {area} {name}"
+          - "turn on [the] {name} (on|in) [the] {floor} [floor]"
+          - "turn on [the] {floor} [floor] {name}"
+        requires_context:
+          domain:
+            - light
+            - switch
+
+      - sentences:
+          - "turn on [the] {area} lights"
+          - "turn on [the] lights in [the] {area}"
+          - "turn on [the] {floor} [floor] lights"
+          - "turn on [the] lights (on|in) [the] {floor} [floor]"
+
+      # open
+      - sentences:
+          - "open [the] {name}"
+        requires_context:
+          domain:
+            - cover
+            - valve
+
+      # lock
+      - sentences:
+          - "lock [the] {name}"
+        requires_context:
+          domain: lock
+
+  HassTurnOff:
+    data:
+      # turn off
+      - sentences:
+          - "turn off [the] lights"
+
+      - sentences:
+          - "turn off [the] {name}"
+          - "turn off [the] {name} in [the] {area}"
+          - "turn off [the] {area} {name}"
+          - "turn off [the] {name} (on|in) [the] {floor} [floor]"
+          - "turn off [the] {floor} [floor] {name}"
+        requires_context:
+          domain:
+            - light
+            - switch
+
+      - sentences:
+          - "turn off [the] {area} lights"
+          - "turn off [the] lights in [the] {area}"
+          - "turn off [the] {floor} [floor] lights"
+          - "turn off [the] lights (on|in) [the] {floor} [floor]"
+
+      # close
+      - sentences:
+          - "close [the] {name}"
+        requires_context:
+          domain:
+            - cover
+            - valve
+
+      # unlock
+      - sentences:
+          - "unlock [the] {name}"
+        requires_context:
+          domain: lock

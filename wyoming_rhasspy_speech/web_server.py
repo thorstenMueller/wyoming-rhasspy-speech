@@ -294,7 +294,9 @@ async def train_model(
     try:
         _LOGGER.info("Training %s (suffix=%s)", model_id, suffix)
         start_time = time.monotonic()
-        sentences_path = state.settings.sentences_path(model_id, suffix)
+        # TODO
+        # sentences_path = state.settings.sentences_path(model_id, suffix)
+        sentences_path = Path("/home/hansenm/opt/wyoming-rhasspy-speech/wyoming_rhasspy_speech/sentences/en.yaml")
         model_train_dir = state.settings.model_train_dir(model_id, suffix)
         model_train_dir.mkdir(parents=True, exist_ok=True)
 
@@ -319,5 +321,7 @@ async def train_model(
         _LOGGER.debug(
             "Training completed in %s second(s)", time.monotonic() - start_time
         )
+    except Exception:
+        _LOGGER.exception("Unexpected error while training")
     finally:
         log_queue.put(None)
