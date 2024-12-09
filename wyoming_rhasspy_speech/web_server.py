@@ -10,7 +10,7 @@ from collections.abc import Collection, Iterable
 from logging.handlers import QueueHandler
 from pathlib import Path
 from queue import Queue
-from typing import Optional
+from typing import List, Optional
 from urllib.request import urlopen
 
 from flask import Flask, Response, redirect, render_template, request
@@ -294,9 +294,29 @@ async def train_model(
     try:
         _LOGGER.info("Training %s (suffix=%s)", model_id, suffix)
         start_time = time.monotonic()
-        # TODO
-        # sentences_path = state.settings.sentences_path(model_id, suffix)
-        sentences_path = Path("/home/hansenm/opt/wyoming-rhasspy-speech/wyoming_rhasspy_speech/sentences/en.yaml")
+        language = model_id.split("-")[0].split("_")[0]
+
+        sentence_files: List[Path] = []
+        sentences_path = state.settings.sentences_path(model_id, suffix)
+        if sentences_path.exists():
+            temp_sentences = tempfile.NamedTemporaryFile("w+", suffix=".yaml")
+            with open(sentences_path, "r") as sentences_file:
+                sentences_dict = safe_load(sentences_file)
+                safe_dump(
+                    {"intents": {"__user__": {"data": [sentences_dict]}}},
+                    temp_sentences,
+                )
+
+            temp_sentences.seek(0)
+            sentence_files.append(temp_sentences.name)
+
+        intents_path = _DIR / "sentences" / f"{language}.yaml"
+        if intents_path.exists():
+            sentence_files.append(intents_path)
+
+        if not sentence_files:
+            raise ValueError("No sentence files")
+
         model_train_dir = state.settings.model_train_dir(model_id, suffix)
         model_train_dir.mkdir(parents=True, exist_ok=True)
 
@@ -308,10 +328,9 @@ async def train_model(
         else:
             lang_suffixes = (LangSuffix.ARPA,)
 
-        language = model_id.split("-")[0].split("_")[0]
         await rhasspy_train_model(
             language=language,
-            sentence_files=[sentences_path],
+            sentence_files=sentence_files,
             model_dir=state.settings.models_dir / model_id,
             train_dir=model_train_dir,
             tools=KaldiTools.from_tools_dir(state.settings.tools_dir),

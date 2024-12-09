@@ -24,7 +24,7 @@ class AppSettings:
     speex_auto_gain: int
 
     # Edit distance
-    norm_distance_threshold: float
+    max_fuzzy_cost: float
 
     # Transcribers
     max_active: int

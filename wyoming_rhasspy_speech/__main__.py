@@ -102,7 +102,7 @@ async def main() -> None:
         help="Auto gain level (default: 4000)",
     )
     # Edit distance
-    parser.add_argument("--norm-distance-threshold", type=float, default=0.15)
+    parser.add_argument("--max-fuzzy-cost", type=float, default=2.0)
     # Transcribers
     parser.add_argument("--max-active", type=int, default=7000)
     parser.add_argument("--lattice-beam", type=float, default=8.0)
@@ -140,7 +140,7 @@ async def main() -> None:
             speex_noise_suppression=args.speex_noise_suppression,
             speex_auto_gain=args.speex_auto_gain,
             # Edit distance
-            norm_distance_threshold=args.norm_distance_threshold,
+            max_fuzzy_cost=args.max_fuzzy_cost,
             # Transcribers
             max_active=args.max_active,
             lattice_beam=args.lattice_beam,
@@ -295,13 +295,19 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                             / "data"
                             / "lang_arpa_rescore",
                             nbest=self.state.settings.nbest,
+                            max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
                         )
                     )
                 else:
                     # Streaming without rescoring
                     self.transcribe_task = asyncio.create_task(
                         transcriber.async_transcribe(
-                            self.audio_stream(), nbest=self.state.settings.nbest
+                            self.audio_stream(),
+                            lang_dir=self.model_train_dir
+                            / "data"
+                            / f"lang_{self.state.settings.decode_mode.value}",
+                            nbest=self.state.settings.nbest,
+                            max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
                         )
                     )
             else:
@@ -419,10 +425,16 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                             / "data"
                             / "lang_arpa_rescore",
                             nbest=self.state.settings.nbest,
+                            max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
                         )
                     else:
                         texts = await self.transcriber.async_transcribe(
-                            wav_path, nbest=self.state.settings.nbest
+                            wav_path,
+                            self.model_train_dir
+                            / "data"
+                            / f"lang_{self.state.settings.decode_mode.value}",
+                            nbest=self.state.settings.nbest,
+                            max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
                         )
 
                     self.transcriber = None
@@ -527,9 +539,9 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                     version="1.0.0",
                     models=[
                         AsrModel(
-                            name=model_id
-                            if (suffix is None)
-                            else f"{model_id}/{suffix}",
+                            name=(
+                                model_id if (suffix is None) else f"{model_id}/{suffix}"
+                            ),
                             description=model_id,
                             attribution=Attribution(name="", url=""),
                             installed=True,
