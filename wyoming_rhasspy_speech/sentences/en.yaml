@@ -20,6 +20,15 @@ lists:
       from: 5
       to: 100
       step: 5
+  minutes_small:
+    range:
+      from: 1
+      to: 9
+  minutes_large:
+    range:
+      from: 10
+      to: 100
+      step: 5
 
   # TODO
   name:
@@ -268,3 +277,16 @@ intents:
           - "unlock [the] {name}"
         requires_context:
           domain: lock
+
+  # timers
+  HassStartTimer:
+    data:
+      - sentences:
+          - "(set|start|create) [a] timer for 1 minute"
+          - "(set|start|create) [a] timer for {minutes_small} minutes"
+          - "(set|start|create) [a] timer for {minutes_large} minutes"
+
+  HassCancelTimer:
+    data:
+      - sentences:
+          - "(cancel|stop) [the|my] timer"

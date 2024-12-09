@@ -108,7 +108,7 @@ async def main() -> None:
     parser.add_argument("--lattice-beam", type=float, default=8.0)
     parser.add_argument("--acoustic-scale", type=float, default=0.5)
     parser.add_argument("--beam", type=float, default=24.0)
-    parser.add_argument("--nbest", type=int, default=1)
+    parser.add_argument("--nbest", type=int, default=3)
     parser.add_argument("--streaming", action="store_true")
     #
     parser.add_argument(
