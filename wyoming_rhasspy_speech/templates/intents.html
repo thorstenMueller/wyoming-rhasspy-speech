@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+
+{% block header %}
+<h1>Intents ({{ language }})</h1>
+{% endblock %}
+
+{% block content %}
+<div class="row mb-3">
+  <a href="{{ url_for('index') }}">Back to models</a>
+</div>
+
+<div class="row text-start">
+
+{% if not sentences: %}
+<div class="alert alert-danger" role="alert">
+  No sentences found for language.
+</div>
+{% endif %}
+
+{% for intent_name, sentence_groups in sentences.items(): %}
+<div class="col-12 col-md-6 col-lg-4 border m-0 p-0">
+<h2 class="bg-secondary text-white text-center p-1">{{ intent_name }}</h2>
+
+{% for group_idx, sentence_texts in sentence_groups.items(): %}
+
+{% if sentence_texts | length > 1: %}
+<details class="mb-3 p-2">
+  <summary>{{ sentence_texts[0] }}</summary>
+  <ul>
+{% for sentence_text in sentence_texts[1:] %}
+  <li class="p-1">{{ sentence_text }}</li>
+{% endfor %}
+  </ul>
+</details>
+{% else %}
+<p class="p-2">
+  {{ sentence_texts[0] }}
+</p>
+{% endif %}
+
+{% endfor %}
+
+</div>  <!-- intent column -->
+{% endfor %}
+
+</div> <!-- row -->
+{% endblock %}

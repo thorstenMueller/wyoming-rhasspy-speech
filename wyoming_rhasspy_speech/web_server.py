@@ -22,15 +22,19 @@ from rhasspy_speech.train import train_model as rhasspy_train_model
 from werkzeug.middleware.proxy_fix import ProxyFix
 from yaml import SafeDumper, safe_dump, safe_load
 
+from hassil.intents import Intents
+
 from .hass_api import get_exposed_dict
 from .models import MODELS
 from .shared import AppState
+from .sample import sample_intents
 
 _DIR = Path(__file__).parent
 _LOGGER = logging.getLogger(__name__)
 
 
 DOWNLOAD_CHUNK_SIZE = 1024 * 10
+USER_INTENT = "CustomSentences"
 
 
 def ingress_url_for(endpoint, **values):
@@ -277,6 +281,21 @@ def get_app(state: AppState) -> Flask:
             guessed=guessed,
         )
 
+    @app.route("/intents")
+    def intents():
+        model_id = request.args["id"]
+        suffix = request.args.get("suffix")
+
+        language = get_locale(model_id)
+        intents = get_intents(state, model_id, suffix)
+
+        if intents is not None:
+            sentences = sample_intents(intents)
+        else:
+            sentences = {}
+
+        return render_template("intents.html", sentences=sentences, language=language)
+
     @app.errorhandler(Exception)
     async def handle_error(err):
         """Return error as text."""
@@ -288,34 +307,75 @@ def get_app(state: AppState) -> Flask:
 # -----------------------------------------------------------------------------
 
 
+def get_locale(model_id: str) -> str:
+    return model_id.split("-", maxsplit=1)[0]
+
+
+def get_language(model_id: str) -> str:
+    return model_id.split("-", maxsplit=1)[0].split("_", maxsplit=1)[0]
+
+
+def get_intents(state: AppState, model_id: str, suffix: Optional[str]) -> Optional[Intents]:
+    language = get_language(model_id)
+    sentence_files: List[Path] = []
+    sentences_path = state.settings.sentences_path(model_id, suffix)
+    if sentences_path.exists():
+        temp_sentences = tempfile.NamedTemporaryFile("w+", suffix=".yaml")
+        with open(sentences_path, "r") as sentences_file:
+            intents_dict = {}
+            sentences_dict = safe_load(sentences_file)
+            if "sentences" in sentences_dict:
+                intent_data = []
+                plain_sentences = []
+                for sentence in sentences_dict["sentences"]:
+                    if isinstance(sentence, str):
+                        plain_sentences.append(sentence)
+                    else:
+                        sentence_template = sentence.pop("in", None)
+                        if not sentence_template:
+                            _LOGGER.warning("Malformed sentence: %s", sentence)
+                            continue
+
+                        intent_data.append(
+                            {"sentences": [sentence_template], **sentence}
+                        )
+
+                if plain_sentences:
+                    intent_data.append({"sentences": plain_sentences})
+
+                intents_dict["intents"] = {USER_INTENT: {"data": intent_data}}
+
+            if "lists" in sentences_dict:
+                intents_dict["lists"] = sentences_dict["lists"]
+
+            if "expansion_rules" in sentences_dict:
+                intents_dict["expansion_rules"] = sentences_dict["expansion_rules"]
+
+            safe_dump(intents_dict, temp_sentences)
+
+        temp_sentences.seek(0)
+        sentence_files.append(temp_sentences.name)
+
+    intents_path = _DIR / "sentences" / f"{language}.yaml"
+    if intents_path.exists():
+        sentence_files.append(intents_path)
+
+    if not sentence_files:
+        return None
+
+    return Intents.from_files(sentence_files)
+
+
 async def train_model(
     state: AppState, model_id: str, suffix: Optional[str], log_queue: Queue
 ):
     try:
         _LOGGER.info("Training %s (suffix=%s)", model_id, suffix)
         start_time = time.monotonic()
-        language = model_id.split("-")[0].split("_")[0]
-
-        sentence_files: List[Path] = []
-        sentences_path = state.settings.sentences_path(model_id, suffix)
-        if sentences_path.exists():
-            temp_sentences = tempfile.NamedTemporaryFile("w+", suffix=".yaml")
-            with open(sentences_path, "r") as sentences_file:
-                sentences_dict = safe_load(sentences_file)
-                safe_dump(
-                    {"intents": {"__user__": {"data": [sentences_dict]}}},
-                    temp_sentences,
-                )
-
-            temp_sentences.seek(0)
-            sentence_files.append(temp_sentences.name)
-
-        intents_path = _DIR / "sentences" / f"{language}.yaml"
-        if intents_path.exists():
-            sentence_files.append(intents_path)
-
-        if not sentence_files:
-            raise ValueError("No sentence files")
+        language = get_language(model_id)
+        intents = get_intents(state, model_id, suffix)
+        if intents is None:
+            raise ValueError("No intents")
 
         model_train_dir = state.settings.model_train_dir(model_id, suffix)
         model_train_dir.mkdir(parents=True, exist_ok=True)
@@ -330,7 +390,7 @@ async def train_model(
 
         await rhasspy_train_model(
             language=language,
-            sentence_files=sentence_files,
+            intents=intents,
             model_dir=state.settings.models_dir / model_id,
             train_dir=model_train_dir,
             tools=KaldiTools.from_tools_dir(state.settings.tools_dir),
