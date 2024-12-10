@@ -10,7 +10,7 @@ from collections.abc import Collection, Iterable
 from logging.handlers import QueueHandler
 from pathlib import Path
 from queue import Queue
-from typing import Dict, List, Optional, TextIO, Tuple, Union
+from typing import Any, Dict, List, Optional, TextIO, Tuple, Union
 from urllib.request import urlopen
 
 from flask import Flask, Response, redirect, render_template, request
@@ -329,12 +329,12 @@ def get_intents(
     language = get_language(model_id)
     words: Optional[Dict[str, Union[str, List[str]]]] = None
 
-    sentence_files: List[Path] = []
+    sentence_files: List[Union[str, Path]] = []
     sentences_path = state.settings.sentences_path(model_id, suffix)
     if sentences_path.exists():
         temp_sentences = tempfile.NamedTemporaryFile("w+", suffix=".yaml")
-        with open(sentences_path, "r") as sentences_file:
-            intents_dict = {}
+        with open(sentences_path, "r", encoding="utf-8") as sentences_file:
+            intents_dict: Dict[str, Any] = {"language": language}
             sentences_dict = safe_load(sentences_file)
             words = sentences_dict.get("words")
             if "sentences" in sentences_dict:
@@ -369,14 +369,15 @@ def get_intents(
         temp_sentences.seek(0)
         sentence_files.append(temp_sentences.name)
 
-    lists_path = state.settings.lists_path(model_id, suffix)
-    if lists_path.exists():
-        sentence_files.append(lists_path)
+    if state.settings.hass_builtin_intents:
+        intents_path = _DIR / "sentences" / f"{language}.yaml"
+        if intents_path.exists():
+            sentence_files.append(intents_path)
 
     if not sentence_files:
         return None, None
 
-    lists_path = _DIR / "sentences" / f"{language}.yaml"
+    lists_path = state.settings.lists_path(model_id, suffix)
     if lists_path.exists():
         sentence_files.append(lists_path)
 
@@ -384,6 +385,8 @@ def get_intents(
 
 
 async def write_exposed(state: AppState, yaml_file: TextIO) -> None:
+    assert state.settings.hass_token, "No token"
+
     exposed_dict = await get_exposed_dict(
         state.settings.hass_token, state.settings.hass_websocket_uri
     )

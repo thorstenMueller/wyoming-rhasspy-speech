@@ -42,6 +42,7 @@ class AppSettings:
     hass_websocket_uri: str = "homeassistant.local"
     hass_ingress: bool = False
     hass_auto_train: bool = False
+    hass_builtin_intents: bool = True
 
     def model_data_dir(self, model_id: str) -> Path:
         return self.models_dir / model_id

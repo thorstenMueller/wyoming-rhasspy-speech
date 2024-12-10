@@ -12,7 +12,7 @@ from collections import defaultdict
 from functools import partial
 from pathlib import Path
 from threading import Thread
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 from urllib.request import urlopen
 
 from pyring_buffer import RingBuffer
@@ -72,6 +72,11 @@ async def main() -> None:
         "--hass-auto-train",
         action="store_true",
         help="Download and include Home Assistant entities during training",
+    )
+    parser.add_argument(
+        "--no-hass-builtin-intents",
+        action="store_true",
+        help="Don't include builtin intents when training",
     )
     # Web server
     parser.add_argument("--web-server-host", default="localhost")
@@ -169,6 +174,7 @@ async def main() -> None:
             hass_websocket_uri=args.hass_websocket_uri,
             hass_ingress=args.hass_ingress,
             hass_auto_train=args.hass_auto_train,
+            hass_builtin_intents=(not args.no_hass_builtin_intents),
         )
     )
 
@@ -570,6 +576,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
 
     def get_info(self) -> Info:
         # [(model_id, suffix)]
+        suffix: Optional[str]
         trained_models: List[Tuple[str, Optional[str]]] = []
 
         for model_dir in self.state.settings.models_dir.iterdir():
@@ -593,7 +600,9 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             _LOGGER.warning("No trained models found.")
 
         # program -> language -> (model_id, suffix)
-        language_support = defaultdict(dict)
+        language_support: Dict[str, Dict[str, Tuple[str, Optional[str]]]] = defaultdict(
+            dict
+        )
         for model_id, suffix in trained_models:
             # en_US-rhasspy -> rhasspy
             language, program = model_id.split("-", maxsplit=1)

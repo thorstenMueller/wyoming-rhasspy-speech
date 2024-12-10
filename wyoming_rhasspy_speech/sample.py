@@ -28,13 +28,15 @@ from hassil.util import (
 )
 
 
-def sample_intents(intents: Intents) -> Dict[str, Dict[str, List[str]]]:
+def sample_intents(intents: Intents) -> Dict[str, Dict[int, List[str]]]:
     """Sample text strings for sentences from intents."""
-    sentences = defaultdict(lambda: defaultdict(list))
+    sentences: Dict[str, Dict[int, List[str]]] = defaultdict(lambda: defaultdict(list))
 
     for intent_name, intent in sorted(intents.intents.items(), key=lambda kv: kv[0]):
         for group_idx, intent_data in enumerate(intent.data):
-            for intent_sentence in sorted(intent_data.sentences, key=lambda s: s.text):
+            for intent_sentence in sorted(
+                intent_data.sentences, key=lambda s: s.text or ""
+            ):
                 sentence_texts = sample_expression(
                     intent_sentence, intent_data, intents
                 )
