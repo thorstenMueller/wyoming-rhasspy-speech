@@ -10,7 +10,7 @@ from collections.abc import Collection, Iterable
 from logging.handlers import QueueHandler
 from pathlib import Path
 from queue import Queue
-from typing import List, Optional
+from typing import List, Optional, Tuple, Dict, Union
 from urllib.request import urlopen
 
 from flask import Flask, Response, redirect, render_template, request
@@ -287,14 +287,20 @@ def get_app(state: AppState) -> Flask:
         suffix = request.args.get("suffix")
 
         language = get_locale(model_id)
-        intents = get_intents(state, model_id, suffix)
+        intents, _words = get_intents(state, model_id, suffix)
 
         if intents is not None:
             sentences = sample_intents(intents)
         else:
             sentences = {}
 
-        return render_template("intents.html", sentences=sentences, language=language)
+        return render_template(
+            "intents.html",
+            model_id=model_id,
+            suffix=suffix,
+            sentences=sentences,
+            language=language,
+        )
 
     @app.errorhandler(Exception)
     async def handle_error(err):
@@ -315,8 +321,12 @@ def get_language(model_id: str) -> str:
     return model_id.split("-", maxsplit=1)[0].split("_", maxsplit=1)[0]
 
 
-def get_intents(state: AppState, model_id: str, suffix: Optional[str]) -> Optional[Intents]:
+def get_intents(
+    state: AppState, model_id: str, suffix: Optional[str]
+) -> Tuple[Optional[Intents], Optional[Dict[str, Union[str, List[str]]]]]:
     language = get_language(model_id)
+    words: Optional[Dict[str, Union[str, List[str]]]] = None
+
     sentence_files: List[Path] = []
     sentences_path = state.settings.sentences_path(model_id, suffix)
     if sentences_path.exists():
@@ -324,6 +334,7 @@ def get_intents(state: AppState, model_id: str, suffix: Optional[str]) -> Option
         with open(sentences_path, "r") as sentences_file:
             intents_dict = {}
             sentences_dict = safe_load(sentences_file)
+            words = sentences_dict.get("words")
             if "sentences" in sentences_dict:
                 intent_data = []
                 plain_sentences = []
@@ -361,9 +372,9 @@ def get_intents(state: AppState, model_id: str, suffix: Optional[str]) -> Option
         sentence_files.append(intents_path)
 
     if not sentence_files:
-        return None
+        return None, None
 
-    return Intents.from_files(sentence_files)
+    return Intents.from_files(sentence_files), words
 
 
 async def train_model(
@@ -373,7 +384,7 @@ async def train_model(
         _LOGGER.info("Training %s (suffix=%s)", model_id, suffix)
         start_time = time.monotonic()
         language = get_language(model_id)
-        intents = get_intents(state, model_id, suffix)
+        intents, words = get_intents(state, model_id, suffix)
         if intents is None:
             raise ValueError("No intents")
 
@@ -393,6 +404,7 @@ async def train_model(
             intents=intents,
             model_dir=state.settings.models_dir / model_id,
             train_dir=model_train_dir,
+            words=words,
             tools=KaldiTools.from_tools_dir(state.settings.tools_dir),
             lang_suffixes=lang_suffixes,
             rescore_order=state.settings.arpa_rescore_order,

@@ -39,7 +39,13 @@
       </tr>
       <tr>
         <td>
-          <a href="{{ url_for('words', id=model_id) }}" class="btn btn-secondary">Edit Words</a>
+          <a href="{{ url_for('intents', id=model_id, suffix=suffix) }}" class="btn btn-info">View Intents</a>
+        </td>
+        <td>See what kinds of voice commands you can say.</td>
+      </tr>
+      <tr>
+        <td>
+          <a href="{{ url_for('words', id=model_id) }}" class="btn btn-secondary">Look Up Words</a>
         </td>
         <td>Look up or guess word pronunciations.</td>
       </tr>

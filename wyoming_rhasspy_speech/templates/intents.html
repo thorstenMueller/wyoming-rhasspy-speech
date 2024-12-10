@@ -6,7 +6,7 @@
 
 {% block content %}
 <div class="row mb-3">
-  <a href="{{ url_for('index') }}">Back to models</a>
+  <a href="{{ url_for('manage', id=model_id) }}">Back to model</a>
 </div>
 
 <div class="row text-start">
@@ -19,7 +19,7 @@
 
 {% for intent_name, sentence_groups in sentences.items(): %}
 <div class="col-12 col-md-6 col-lg-4 border m-0 p-0">
-<h2 class="bg-secondary text-white text-center p-1">{{ intent_name }}</h2>
+<h2 class="bg-info text-white text-center p-1">{{ intent_name }}</h2>
 
 {% for group_idx, sentence_texts in sentence_groups.items(): %}
 
