@@ -347,8 +347,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             self.model_data_dir = self.state.settings.model_data_dir(self.model_id)
 
             # Empty queue
-            while not self.audio_queue.empty():
-                self.audio_queue.get_nowait()
+            self.audio_queue = asyncio.Queue()
 
             if self.is_streaming:
                 # Streaming audio
