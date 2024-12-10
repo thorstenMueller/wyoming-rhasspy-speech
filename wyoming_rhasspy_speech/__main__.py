@@ -3,6 +3,8 @@ import argparse
 import array
 import asyncio
 import logging
+import shutil
+import tarfile
 import tempfile
 import time
 import wave
@@ -11,6 +13,7 @@ from functools import partial
 from pathlib import Path
 from threading import Thread
 from typing import List, Optional, Tuple
+from urllib.request import urlopen
 
 from pyring_buffer import RingBuffer
 from pysilero_vad import SileroVoiceActivityDetector
@@ -25,8 +28,9 @@ from wyoming.event import Event
 from wyoming.info import AsrModel, AsrProgram, Attribution, Describe, Info
 from wyoming.server import AsyncEventHandler, AsyncServer
 
+from .models import MODELS, Model
 from .shared import AppSettings, AppState
-from .web_server import get_app
+from .web_server import get_app, train_model, write_exposed
 
 _LOGGER = logging.getLogger()
 _DIR = Path(__file__).parent
@@ -63,6 +67,11 @@ async def main() -> None:
         "--hass-ingress",
         action="store_true",
         help="Web server is behind Home Assistant ingress proxy",
+    )
+    parser.add_argument(
+        "--hass-auto-train",
+        action="store_true",
+        help="Download and include Home Assistant entities during training",
     )
     # Web server
     parser.add_argument("--web-server-host", default="localhost")
@@ -118,6 +127,10 @@ async def main() -> None:
     )
     parser.add_argument("--arpa-rescore-order", type=int, default=5)
     #
+    parser.add_argument(
+        "--auto-train", help="Model id to automatically download and train"
+    )
+    #
     parser.add_argument("--debug", action="store_true", help="Log DEBUG messages")
     args = parser.parse_args()
 
@@ -146,7 +159,7 @@ async def main() -> None:
             lattice_beam=args.lattice_beam,
             acoustic_scale=args.acoustic_scale,
             beam=args.beam,
-            nbest=args.nbest,
+            nbest=args.nbest if args.decode_mode != "grammar" else 1,
             streaming=args.streaming,
             #
             decode_mode=LangSuffix(args.decode_mode),
@@ -155,6 +168,7 @@ async def main() -> None:
             hass_token=args.hass_token,
             hass_websocket_uri=args.hass_websocket_uri,
             hass_ingress=args.hass_ingress,
+            hass_auto_train=args.hass_auto_train,
         )
     )
 
@@ -172,6 +186,69 @@ async def main() -> None:
         },
         daemon=True,
     ).start()
+
+    if args.auto_train:
+        model: Optional[Model] = None
+        for model_id, maybe_model in MODELS.items():
+            if model_id.startswith(args.auto_train):
+                model = maybe_model
+                break
+
+        if model is not None:
+            model_data_dir = state.settings.model_data_dir(model.id)
+            if not model_data_dir.exists():
+                _LOGGER.debug("Downloading %s", model.url)
+                with urlopen(
+                    model.url
+                ) as model_response, tempfile.TemporaryDirectory() as temp_dir:
+                    model_path = Path(temp_dir) / "model.tar.gz"
+                    with open(model_path, "wb") as model_tar_file:
+                        shutil.copyfileobj(model_response, model_tar_file)
+
+                    _LOGGER.debug("Extracting %s", model_path)
+                    state.settings.models_dir.mkdir(parents=True, exist_ok=True)
+                    with tarfile.open(model_path, "r:gz") as model_tar_file:
+                        model_tar_file.extractall(state.settings.models_dir)
+            else:
+                _LOGGER.debug("[Auto train] model already downloaded: %s", model.id)
+
+            force_retrain = False
+            if state.settings.hass_auto_train:
+                lists_path = state.settings.lists_path(model.id)
+                if not lists_path.exists():
+                    if state.settings.hass_token:
+                        _LOGGER.debug(
+                            "Downloading Home Assistant entities from %s",
+                            state.settings.hass_websocket_uri,
+                        )
+                        lists_path.parent.mkdir(parents=True, exist_ok=True)
+                        with open(lists_path, "w", encoding="utf-8") as lists_file:
+                            await write_exposed(state, lists_file)
+
+                        _LOGGER.debug(
+                            "Downloaded Home Assistant entities. Will re-train."
+                        )
+                        force_retrain = True
+                    else:
+                        _LOGGER.warning(
+                            "Can't download Home Assistant entities without --hass-token"
+                        )
+                else:
+                    _LOGGER.debug(
+                        "[Auto train] Home Assistant entities already downloaded."
+                    )
+
+            model_train_dir = state.settings.model_train_dir(model.id)
+            model_lang_dir = (
+                model_train_dir / "data" / f"lang_{state.settings.decode_mode}"
+            )
+            if force_retrain or (not model_lang_dir.exists()):
+                _LOGGER.debug("Auto training: %s", model.id)
+                await train_model(state, model.id)
+            else:
+                _LOGGER.debug("[Auto train] model already trained: %s", model.id)
+        else:
+            _LOGGER.warning("Can't auto train. No model for %s", args.auto_train)
 
     wyoming_server = AsyncServer.from_uri(args.uri)
 

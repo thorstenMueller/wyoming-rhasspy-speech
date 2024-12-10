@@ -2,29 +2,29 @@ import itertools
 from collections import defaultdict
 from collections.abc import Iterable
 from functools import partial
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
 
-from hassil.util import (
-    normalize_whitespace,
-    check_excluded_context,
-    check_required_context,
-)
-from hassil.intents import (
-    Intents,
-    IntentData,
-    TextSlotList,
-    RangeSlotList,
-    SlotList,
-    TextSlotValue,
-)
 from hassil.expression import (
     Expression,
-    TextChunk,
-    Sequence,
-    SequenceType,
     ListReference,
     RuleReference,
     Sentence,
+    Sequence,
+    SequenceType,
+    TextChunk,
+)
+from hassil.intents import (
+    IntentData,
+    Intents,
+    RangeSlotList,
+    SlotList,
+    TextSlotList,
+    TextSlotValue,
+)
+from hassil.util import (
+    check_excluded_context,
+    check_required_context,
+    normalize_whitespace,
 )
 
 

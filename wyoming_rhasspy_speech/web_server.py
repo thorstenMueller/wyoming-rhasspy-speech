@@ -10,11 +10,12 @@ from collections.abc import Collection, Iterable
 from logging.handlers import QueueHandler
 from pathlib import Path
 from queue import Queue
-from typing import List, Optional, Tuple, Dict, Union
+from typing import Dict, List, Optional, TextIO, Tuple, Union
 from urllib.request import urlopen
 
 from flask import Flask, Response, redirect, render_template, request
 from flask import url_for as flask_url_for
+from hassil.intents import Intents
 from rhasspy_speech.const import LangSuffix
 from rhasspy_speech.g2p import LexiconDatabase, get_sounds_like, guess_pronunciations
 from rhasspy_speech.tools import KaldiTools
@@ -22,12 +23,10 @@ from rhasspy_speech.train import train_model as rhasspy_train_model
 from werkzeug.middleware.proxy_fix import ProxyFix
 from yaml import SafeDumper, safe_dump, safe_load
 
-from hassil.intents import Intents
-
 from .hass_api import get_exposed_dict
 from .models import MODELS
-from .shared import AppState
 from .sample import sample_intents
+from .shared import AppState
 
 _DIR = Path(__file__).parent
 _LOGGER = logging.getLogger(__name__)
@@ -144,6 +143,13 @@ def get_app(state: AppState) -> Flask:
         text = "Training started\n"
 
         try:
+            if state.settings.hass_auto_train and state.settings.hass_token:
+                _LOGGER.debug("Downloading Home Assistant entities")
+                lists_path = state.settings.lists_path(model_id, suffix)
+                lists_path.parent.mkdir(parents=True, exist_ok=True)
+                with open(lists_path, "w", encoding="utf-8") as lists_file:
+                    await write_exposed(state, lists_file)
+
             await train_model(state, model_id, suffix, log_queue)
             while True:
                 log_item = log_queue.get()
@@ -219,12 +225,8 @@ def get_app(state: AppState) -> Flask:
         if state.settings.hass_token is None:
             return "No Home Assistant token"
 
-        exposed_dict = await get_exposed_dict(
-            state.settings.hass_token, state.settings.hass_websocket_uri
-        )
-        SafeDumper.ignore_aliases = lambda *args: True  # type: ignore[assignment]
         with io.StringIO() as hass_exposed_file:
-            safe_dump({"lists": exposed_dict}, hass_exposed_file, sort_keys=False)
+            await write_exposed(state, hass_exposed_file)
             return hass_exposed_file.getvalue()
 
     @app.route("/words", methods=["GET", "POST"])
@@ -367,18 +369,33 @@ def get_intents(
         temp_sentences.seek(0)
         sentence_files.append(temp_sentences.name)
 
-    intents_path = _DIR / "sentences" / f"{language}.yaml"
-    if intents_path.exists():
-        sentence_files.append(intents_path)
+    lists_path = state.settings.lists_path(model_id, suffix)
+    if lists_path.exists():
+        sentence_files.append(lists_path)
 
     if not sentence_files:
         return None, None
 
+    lists_path = _DIR / "sentences" / f"{language}.yaml"
+    if lists_path.exists():
+        sentence_files.append(lists_path)
+
     return Intents.from_files(sentence_files), words
 
 
+async def write_exposed(state: AppState, yaml_file: TextIO) -> None:
+    exposed_dict = await get_exposed_dict(
+        state.settings.hass_token, state.settings.hass_websocket_uri
+    )
+    SafeDumper.ignore_aliases = lambda *args: True  # type: ignore[assignment]
+    safe_dump({"lists": exposed_dict}, yaml_file, sort_keys=False)
+
+
 async def train_model(
-    state: AppState, model_id: str, suffix: Optional[str], log_queue: Queue
+    state: AppState,
+    model_id: str,
+    suffix: Optional[str] = None,
+    log_queue: Optional[Queue] = None,
 ):
     try:
         _LOGGER.info("Training %s (suffix=%s)", model_id, suffix)
@@ -415,4 +432,5 @@ async def train_model(
     except Exception:
         _LOGGER.exception("Unexpected error while training")
     finally:
-        log_queue.put(None)
+        if log_queue is not None:
+            log_queue.put(None)

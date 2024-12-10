@@ -41,6 +41,7 @@ class AppSettings:
     hass_token: Optional[str] = None
     hass_websocket_uri: str = "homeassistant.local"
     hass_ingress: bool = False
+    hass_auto_train: bool = False
 
     def model_data_dir(self, model_id: str) -> Path:
         return self.models_dir / model_id
@@ -76,6 +77,14 @@ class AppSettings:
                 suffixes.append(name_parts[1])
 
         return suffixes
+
+    def lists_path(self, model_id: str, suffix: Optional[str] = None) -> Path:
+        if suffix:
+            filename = f"lists_{suffix}.yaml"
+        else:
+            filename = "lists.yaml"
+
+        return self.train_dir / model_id / filename
 
 
 @dataclass
