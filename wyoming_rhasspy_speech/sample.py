@@ -81,9 +81,15 @@ def sample_expression(
             text_list: TextSlotList = slot_list
 
             # Filter by context
+            sorted_values = sorted(
+                text_list.values,
+                key=lambda v: v.text_in.text
+                if isinstance(v.text_in, TextChunk)
+                else str(v.text_in),
+            )
             possible_values: List[TextSlotValue] = []
             if intent_data.requires_context or intent_data.excludes_context:
-                for value in text_list.values:
+                for value in sorted_values:
                     if not value.context:
                         possible_values.append(value)
                         continue
@@ -106,7 +112,7 @@ def sample_expression(
 
                     possible_values.append(value)
             else:
-                possible_values = text_list.values
+                possible_values = sorted_values
 
             if possible_values:
                 # First and list values

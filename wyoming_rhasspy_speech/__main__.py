@@ -240,7 +240,7 @@ async def main() -> None:
 
             model_train_dir = state.settings.model_train_dir(model.id)
             model_lang_dir = (
-                model_train_dir / "data" / f"lang_{state.settings.decode_mode}"
+                model_train_dir / "data" / f"lang_{state.settings.decode_mode.value}"
             )
             if force_retrain or (not model_lang_dir.exists()):
                 _LOGGER.debug("Auto training: %s", model.id)
