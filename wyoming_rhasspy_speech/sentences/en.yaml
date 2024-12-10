@@ -36,6 +36,8 @@ lists:
       step: 10
   minutes_extra:
     values:
+      - in: fifteen
+        out: 15
       - in: forty five
         out: 45
   minutes_half:
@@ -200,6 +202,12 @@ lists:
       - in: basement light
         context:
           domain: light
+      - in: living room light
+        context:
+          domain: light
+      - in: living room lamp
+        context:
+          domain: light
   area:
     values:
       - Living Room
@@ -269,10 +277,10 @@ intents:
             - switch
 
       - sentences:
-          - "turn on [the] {area} lights"
-          - "turn on [the] lights in [the] {area}"
-          - "turn on [the] {floor} [floor] lights"
-          - "turn on [the] lights (on|in) [the] {floor} [floor]"
+          - "turn on [all [of]] [the] {area} lights"
+          - "turn on [all [of]] [the] lights in [the] {area}"
+          - "turn on [all [of]] [the] {floor} [floor] lights"
+          - "turn on [all [of]] [the] lights (on|in) [the] {floor} [floor]"
 
       # open
       - sentences:
@@ -283,12 +291,12 @@ intents:
             - valve
 
       - sentences:
-          - "open [the] {cover_classes} in [the] {area}"
-          - "open [the] {area} {cover_classes}"
+          - "open [all [of]] [the] {cover_classes} in [the] {area}"
+          - "open [all [of]] [the] {area} {cover_classes}"
 
       - sentences:
-          - "open [the] {cover_classes} (on|in) [the] {floor} [floor]"
-          - "open [the] {floor} [floor] {cover_classes}"
+          - "open [all [of]] [the] [the] {cover_classes} (on|in) [the] {floor} [floor]"
+          - "open [all [of]] [the] {floor} [floor] {cover_classes}"
 
       # lock
       - sentences:
@@ -314,12 +322,12 @@ intents:
             - switch
 
       - sentences:
-          - "turn off [the] {area} lights"
-          - "turn off [the] lights in [the] {area}"
+          - "turn off [all [of]] [the] {area} lights"
+          - "turn off [all [of]] [the] lights in [the] {area}"
 
       - sentences:
-          - "turn off [the] {floor} [floor] lights"
-          - "turn off [the] lights (on|in) [the] {floor} [floor]"
+          - "turn off [all [of]] [the] {floor} [floor] lights"
+          - "turn off [all [of]] [the] lights (on|in) [the] {floor} [floor]"
 
       # close
       - sentences:
@@ -330,10 +338,10 @@ intents:
             - valve
 
       - sentences:
-          - "close [the] {cover_classes} in [the] {area}"
-          - "close [the] {area} {cover_classes}"
-          - "close [the] {cover_classes} (on|in) [the] {floor} [floor]"
-          - "close [the] {floor} [floor] {cover_classes}"
+          - "close [all [of]] [the] {cover_classes} in [the] {area}"
+          - "close [all [of]] [the] {area} {cover_classes}"
+          - "close [all [of]] [the] {cover_classes} (on|in) [the] {floor} [floor]"
+          - "close [all [of]] [the] {floor} [floor] {cover_classes}"
 
       # unlock
       - sentences:
