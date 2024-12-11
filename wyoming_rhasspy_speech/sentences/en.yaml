@@ -138,6 +138,18 @@ intents:
         requires_context:
           domain: lock
 
+      # script
+      - sentences:
+          - "run {name}"
+        requires_context:
+          domain: script
+
+      # scene
+      - sentences:
+          - "activate {name}"
+        requires_context:
+          domain: scene
+
   HassTurnOff:
     data:
       # turn off

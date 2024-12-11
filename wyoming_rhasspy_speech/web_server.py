@@ -461,8 +461,9 @@ async def train_model(
         _LOGGER.debug(
             "Training completed in %s second(s)", time.monotonic() - start_time
         )
-    except Exception:
+    except Exception as err:
         _LOGGER.exception("Unexpected error while training")
+        raise err
     finally:
         if log_queue is not None:
             log_queue.put(None)
