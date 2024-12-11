@@ -204,18 +204,24 @@ async def main() -> None:
             # Download model
             model_data_dir = state.settings.model_data_dir(model.id)
             if not model_data_dir.exists():
-                _LOGGER.info("Downloading %s", model.url)
-                with urlopen(
-                    model.url
-                ) as model_response, tempfile.TemporaryDirectory() as temp_dir:
-                    model_path = Path(temp_dir) / "model.tar.gz"
-                    with open(model_path, "wb") as model_tar_file:
-                        shutil.copyfileobj(model_response, model_tar_file)
+                try:
+                    _LOGGER.info("Downloading %s", model.url)
+                    with urlopen(
+                        model.url
+                    ) as model_response, tempfile.TemporaryDirectory() as temp_dir:
+                        model_path = Path(temp_dir) / "model.tar.gz"
+                        with open(model_path, "wb") as model_tar_file:
+                            shutil.copyfileobj(model_response, model_tar_file)
 
-                    _LOGGER.debug("Extracting %s", model_path)
-                    state.settings.models_dir.mkdir(parents=True, exist_ok=True)
-                    with tarfile.open(model_path, "r:gz") as model_tar_file:
-                        model_tar_file.extractall(state.settings.models_dir)
+                        _LOGGER.debug("Extracting %s", model_path)
+                        state.settings.models_dir.mkdir(parents=True, exist_ok=True)
+                        with tarfile.open(model_path, "r:gz") as model_tar_file:
+                            model_tar_file.extractall(state.settings.models_dir)
+                except Exception:
+                    _LOGGER.exception(
+                        "Unexpected error while downloading/extracting model"
+                    )
+                    shutil.rmtree(model_data_dir)
             else:
                 _LOGGER.debug("[Auto train] model already downloaded: %s", model.id)
 
@@ -229,14 +235,20 @@ async def main() -> None:
                             "Downloading Home Assistant entities from %s",
                             state.settings.hass_websocket_uri,
                         )
-                        lists_path.parent.mkdir(parents=True, exist_ok=True)
-                        with open(lists_path, "w", encoding="utf-8") as lists_file:
-                            await write_exposed(state, lists_file)
+                        try:
+                            lists_path.parent.mkdir(parents=True, exist_ok=True)
+                            with open(lists_path, "w", encoding="utf-8") as lists_file:
+                                await write_exposed(state, lists_file)
 
-                        _LOGGER.debug(
-                            "Downloaded Home Assistant entities. Will re-train."
-                        )
-                        force_retrain = True
+                            _LOGGER.debug(
+                                "Downloaded Home Assistant entities. Will re-train."
+                            )
+                            force_retrain = True
+                        except Exception:
+                            _LOGGER.exception(
+                                "Unexpected error while downloading Home Assistant entities"
+                            )
+                            lists_path.unlink(missing_ok=True)
                     else:
                         _LOGGER.warning(
                             "Can't download Home Assistant entities without --hass-token"
@@ -252,8 +264,11 @@ async def main() -> None:
                 model_train_dir / "data" / f"lang_{state.settings.decode_mode.value}"
             )
             if force_retrain or (not model_lang_dir.exists()):
-                _LOGGER.debug("Auto training: %s", model.id)
-                await train_model(state, model.id)
+                try:
+                    _LOGGER.debug("Auto training: %s", model.id)
+                    await train_model(state, model.id)
+                except Exception:
+                    _LOGGER.exception("Unexpected error while training")
             else:
                 _LOGGER.debug("[Auto train] model already trained: %s", model.id)
         else:

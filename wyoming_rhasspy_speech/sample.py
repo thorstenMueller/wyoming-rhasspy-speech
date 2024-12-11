@@ -1,8 +1,10 @@
+import base64
 import itertools
+import json
 from collections import defaultdict
 from collections.abc import Iterable
 from functools import partial
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, cast
 
 from hassil.expression import (
     Expression,
@@ -60,8 +62,38 @@ def sample_expression(
         if seq.is_optional:
             yield ""
         elif seq.type == SequenceType.ALTERNATIVE:
+            # Try to compact to/show/alternatives
+            is_all_text = True
+            text_alternatives: List[str] = []
             for item in seq.items:
-                yield from sample_expression(item, intent_data, intents)
+                if isinstance(item, TextChunk):
+                    text_alternatives.append(item.original_text.strip())
+                    continue
+
+                # Unpack max two levels
+                if (
+                    isinstance(item, Sequence)
+                    and (item.type == SequenceType.GROUP)
+                    and all(isinstance(sub_item, TextChunk) for sub_item in item.items)
+                ):
+                    text_alternatives.append(
+                        " ".join(
+                            cast(TextChunk, sub_item).text for sub_item in item.items
+                        )
+                    )
+                    continue
+
+                is_all_text = False
+                break
+
+            if is_all_text:
+                if any(" " in text for text in text_alternatives):
+                    yield "(" + "/".join(text_alternatives) + ")"
+                else:
+                    yield "/".join(text_alternatives)
+            else:
+                for item in seq.items:
+                    yield from sample_expression(item, intent_data, intents)
         elif seq.type == SequenceType.GROUP:
             seq_sentences = map(
                 partial(sample_expression, intent_data=intent_data, intents=intents),
@@ -85,9 +117,11 @@ def sample_expression(
             # Filter by context
             sorted_values = sorted(
                 text_list.values,
-                key=lambda v: v.text_in.text
-                if isinstance(v.text_in, TextChunk)
-                else str(v.text_in),
+                key=lambda v: (
+                    v.text_in.text
+                    if isinstance(v.text_in, TextChunk)
+                    else str(v.text_in)
+                ),
             )
             possible_values: List[TextSlotValue] = []
             if intent_data.requires_context or intent_data.excludes_context:
@@ -116,25 +150,23 @@ def sample_expression(
             else:
                 possible_values = sorted_values
 
-            if possible_values:
-                # First and list values
-                sample_values = [possible_values[0]]
-                if len(possible_values) > 1:
-                    sample_values.append(possible_values[-1])
+            value_texts = []
+            for value in possible_values:
+                for value_text in sample_expression(
+                    value.text_in, intent_data, intents
+                ):
+                    value_texts.append(value_text)
 
-                for value in sample_values:
-                    for value_text in sample_expression(
-                        value.text_in, intent_data, intents
-                    ):
-                        yield value_text
-                        break
+            if value_texts:
+                yield "__list:" + base64.b64encode(
+                    json.dumps(value_texts).encode("utf-8")
+                ).decode("utf-8").strip()
             else:
                 yield f"{{{list_ref.list_name}}}"
         elif isinstance(slot_list, RangeSlotList):
             range_list: RangeSlotList = slot_list
 
-            yield str(range_list.start)
-            yield str(range_list.stop)
+            yield f"__number:{range_list.start},{range_list.stop+1},{range_list.step}"
         else:
             yield f"{{{list_ref.list_name}}}"
     elif isinstance(expression, RuleReference):

@@ -1,6 +1,8 @@
 """Web UI for training."""
 
+import base64
 import io
+import json
 import logging
 import re
 import shutil
@@ -321,6 +323,10 @@ def get_app(state: AppState) -> Flask:
             suffix=suffix,
             sentences=sentences,
             language=language,
+            isstring=lambda x: isinstance(x, str),
+            decode_list=lambda x: json.loads(
+                base64.b64decode(x.encode("utf-8")).decode("utf-8")
+            ),
         )
 
     @app.errorhandler(Exception)
@@ -398,9 +404,11 @@ def get_intents(
     if not sentence_files:
         return None, None
 
-    lists_path = state.settings.lists_path(model_id, suffix)
-    if lists_path.exists():
-        sentence_files.append(lists_path)
+    if state.settings.hass_auto_train:
+        # Use Home Assistant entities, if they exist
+        lists_path = state.settings.lists_path(model_id, suffix)
+        if lists_path.exists():
+            sentence_files.append(lists_path)
 
     return Intents.from_files(sentence_files), words
 

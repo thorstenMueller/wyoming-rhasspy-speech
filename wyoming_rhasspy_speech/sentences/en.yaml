@@ -72,23 +72,23 @@ intents:
   HassGetCurrentTime:
     data:
       - sentences:
-          - "(what[']s|what is) the time [[right ]now]"
+          - "(what's|what|what is) the time [[right ]now]"
           - "what time is it [[right ]now]"
 
   HassGetCurrentDate:
     data:
       - sentences:
-          - "(what[']s|what is) the date [today]"
-          - "(what[']s|what is) today's date"
+          - "(what's|what|what is) the date [today]"
+          - "(what's|what|what is) today's date"
 
   HassGetWeather:
     data:
       - sentences:
-          - "(what[']s|what is) the weather [like]"
+          - "(what's|what|what is) the weather [like]"
 
       - sentences:
-          - "(what[']s|what is) the {name} weather [like]"
-          - "(what[']s|what is) the weather [like] in {name}"
+          - "(what's|what|what is) the {name} weather [like]"
+          - "(what's|what|what is) the weather [like] in {name}"
         requires_context:
           domain: weather
 
@@ -146,8 +146,6 @@ intents:
 
       - sentences:
           - "turn off [the] {name}"
-          - "turn off [the] {name} in [the] {area}"
-          - "turn off [the] {name} (on|in) [the] {floor} [floor]"
         requires_context:
           domain:
             - light
@@ -214,7 +212,7 @@ intents:
       - sentences:
           - "set [the] [color of [the]] {floor} [floor] lights to {color}"
           - "set [the] {floor} [floor] lights to {color}"
-          - "set [the] lights in [the] {floor} [floor] to {color}"
+          - "set [the] lights (on|in) [the] {floor} [floor] to {color}"
 
   # timers
   HassStartTimer:
@@ -316,21 +314,21 @@ intents:
   HassGetTemperature:
     data:
       - sentences:
-          - "(what is|what[']s) the (temp|temperature)"
+          - "(what is|what's|what) the (temp|temperature)"
 
       - sentences:
-          - "(what is|what[']s) [the] {name} (temp|temperature)"
-          - "(what is|what[']s) [the] (temp|temperature) of [the] {name}"
+          - "(what is|what's|what) [the] {name} (temp|temperature)"
+          - "(what is|what's|what) [the] (temp|temperature) of [the] {name}"
         requires_context:
           domain: climate
 
       - sentences:
-          - "(what is|what[']s) the (temp|temperature) in [the] {area}"
-          - "(what is|what[']s) the {area} (temp|temperature)"
+          - "(what is|what's|what) the (temp|temperature) in [the] {area}"
+          - "(what is|what's|what) the {area} (temp|temperature)"
 
       - sentences:
-          - "(what is|what[']s) the (temp|temperature) (on|in) [the] {floor} [floor]"
-          - "(what is|what[']s) the {floor} [floor] (temp|temperature)"
+          - "(what is|what's|what) the (temp|temperature) (on|in) [the] {floor} [floor]"
+          - "(what is|what's|what) the {floor} [floor] (temp|temperature)"
 
   # questions
   HassGetState:
@@ -359,3 +357,11 @@ intents:
             values:
               - locked
               - unlocked
+
+  # todo
+  HassListAddItem:
+    data:
+      - sentences:
+          - "add {todo_item} to [the|my] {name} [list]"
+        requires_context:
+          domain: todo

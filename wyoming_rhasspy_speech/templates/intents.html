@@ -23,20 +23,41 @@
 
 {% for group_idx, sentence_texts in sentence_groups.items(): %}
 
-{% if sentence_texts | length > 1: %}
-<details class="mb-3 p-2">
-  <summary>{{ sentence_texts[0] }}</summary>
-  <ul>
-{% for sentence_text in sentence_texts[1:] %}
-  <li class="p-1">{{ sentence_text }}</li>
+{% set processed_texts = [] %}
+{% for sentence_text in sentence_texts: %}
+  {% set processed_words = [] %}
+  {% for word in sentence_text.split(): %}
+    {% if word.startswith("__number:"): %}
+      {% set word_parts = word.split(":", maxsplit=1)[1].split(",") %}
+      {% set _ = processed_words.append(range(word_parts[0] | int, word_parts[1] | int, word_parts[2] | int)) %}
+    {% elif word.startswith("__list:"): %}
+      {% set encoded_list = word.split(":", maxsplit=1)[1] %}
+      {% set _ = processed_words.append(decode_list(encoded_list)) %}
+    {% else: %}
+      {% set _ = processed_words.append(word) %}
+    {% endif %}
+  {% endfor %}
+  {% set _ = processed_texts.append(processed_words) %}
 {% endfor %}
-  </ul>
-</details>
-{% else %}
-<p class="p-2">
-  {{ sentence_texts[0] }}
-</p>
-{% endif %}
+
+<ul>
+{% for processed_words in processed_texts: %}
+  <li class="p-1">
+{% for word in processed_words: %}
+  {% if isstring(word): %}
+  {{ word }}&nbsp;
+  {% else: %}
+  <select>
+    {% for sub_word in word: %}
+    <option {% if loop.index0 == 0:  %}selected{% endif %}>{{ sub_word }}</option>
+    {% endfor %}
+  </select>
+  {% endif %}
+{{ sentence_text }}
+{% endfor %}
+  </li>
+{% endfor %}
+</ul>
 
 {% endfor %}
 
