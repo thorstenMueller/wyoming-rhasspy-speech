@@ -16,6 +16,7 @@ from urllib.request import urlopen
 from flask import Flask, Response, redirect, render_template, request
 from flask import url_for as flask_url_for
 from hassil.intents import Intents
+from hassil.util import merge_dict
 from rhasspy_speech.const import LangSuffix
 from rhasspy_speech.g2p import LexiconDatabase, get_sounds_like, guess_pronunciations
 from rhasspy_speech.tools import KaldiTools
@@ -57,11 +58,20 @@ def get_app(state: AppState) -> Flask:
 
     @app.route("/")
     def index():
+        if state.settings.auto_train_model_id:
+            return redirect(
+                ingress_url_for("manage", id=state.settings.auto_train_model_id)
+            )
+
+        return redirect(ingress_url_for("models"))
+
+    @app.route("/models")
+    def models():
         downloaded_models = {
             m.id for m in MODELS.values() if (state.settings.models_dir / m.id).is_dir()
         }
         return render_template(
-            "index.html",
+            "models.html",
             available_models=MODELS,
             downloaded_models=downloaded_models,
         )
@@ -336,11 +346,12 @@ def get_intents(
         with open(sentences_path, "r", encoding="utf-8") as sentences_file:
             intents_dict: Dict[str, Any] = {"language": language}
             sentences_dict = safe_load(sentences_file)
-            words = sentences_dict.get("words")
-            if "sentences" in sentences_dict:
+            sentences = sentences_dict.pop("sentences", None)
+            words = sentences_dict.pop("words", None)
+            if sentences:
                 intent_data = []
                 plain_sentences = []
-                for sentence in sentences_dict["sentences"]:
+                for sentence in sentences:
                     if isinstance(sentence, str):
                         plain_sentences.append(sentence)
                     else:
@@ -358,12 +369,7 @@ def get_intents(
 
                 intents_dict["intents"] = {USER_INTENT: {"data": intent_data}}
 
-            if "lists" in sentences_dict:
-                intents_dict["lists"] = sentences_dict["lists"]
-
-            if "expansion_rules" in sentences_dict:
-                intents_dict["expansion_rules"] = sentences_dict["expansion_rules"]
-
+            merge_dict(intents_dict, sentences_dict)
             safe_dump(intents_dict, temp_sentences)
 
         temp_sentences.seek(0)

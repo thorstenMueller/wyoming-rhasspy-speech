@@ -44,6 +44,9 @@ class AppSettings:
     hass_auto_train: bool = False
     hass_builtin_intents: bool = True
 
+    # Web server
+    auto_train_model_id: Optional[str] = None
+
     def model_data_dir(self, model_id: str) -> Path:
         return self.models_dir / model_id
 

@@ -201,6 +201,9 @@ async def main() -> None:
                 break
 
         if model is not None:
+            state.settings.auto_train_model_id = model.id
+
+            # Download model
             model_data_dir = state.settings.model_data_dir(model.id)
             if not model_data_dir.exists():
                 _LOGGER.debug("Downloading %s", model.url)
@@ -218,6 +221,7 @@ async def main() -> None:
             else:
                 _LOGGER.debug("[Auto train] model already downloaded: %s", model.id)
 
+            # Download HA entities
             force_retrain = False
             if state.settings.hass_auto_train:
                 lists_path = state.settings.lists_path(model.id)
@@ -244,6 +248,7 @@ async def main() -> None:
                         "[Auto train] Home Assistant entities already downloaded."
                     )
 
+            # Train model
             model_train_dir = state.settings.model_train_dir(model.id)
             model_lang_dir = (
                 model_train_dir / "data" / f"lang_{state.settings.decode_mode.value}"
@@ -334,8 +339,6 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             self.speex = SpeexAudioProcessor(
                 settings.speex_auto_gain, settings.speex_noise_suppression
             )
-
-        _LOGGER.debug("Client connected: %s", self.client_id)
 
     async def handle_event(self, event: Event) -> bool:
         if Describe.is_type(event.type):
@@ -480,46 +483,51 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             start_time = time.monotonic()
             texts: List[str] = []
 
-            if self.is_streaming:
-                assert self.transcribe_task is not None
+            try:
+                if self.is_streaming:
+                    assert self.transcribe_task is not None
 
-                # End stream and get transcript(s)
-                self.audio_queue.put_nowait(None)
-                texts = await self.transcribe_task
+                    # End stream and get transcript(s)
+                    self.audio_queue.put_nowait(None)
+                    texts = await self.transcribe_task
+                else:
+                    assert self.transcriber is not None
+
+                    with tempfile.NamedTemporaryFile("wb+", suffix=".wav") as temp_file:
+                        wav_path = temp_file.name
+                        wav_writer: wave.Wave_write = wave.open(wav_path, "wb")
+                        with wav_writer:
+                            wav_writer.setframerate(16000)
+                            wav_writer.setsampwidth(2)
+                            wav_writer.setnchannels(1)
+                            wav_writer.writeframes(self.audio_buffer)
+
+                        if self.state.settings.decode_mode == LangSuffix.ARPA_RESCORE:
+                            texts = await self.transcriber.async_transcribe_rescore(
+                                wav_path,
+                                old_lang_dir=self.model_train_dir
+                                / "data"
+                                / "lang_arpa",
+                                new_lang_dir=self.model_train_dir
+                                / "data"
+                                / "lang_arpa_rescore",
+                                nbest=self.state.settings.nbest,
+                                max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
+                            )
+                        else:
+                            texts = await self.transcriber.async_transcribe(
+                                wav_path,
+                                self.model_train_dir
+                                / "data"
+                                / f"lang_{self.state.settings.decode_mode.value}",
+                                nbest=self.state.settings.nbest,
+                                max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
+                            )
+            except Exception:
+                _LOGGER.exception("Unexpected error getting transcripts")
+            finally:
                 self.transcribe_task = None
-            else:
-                assert self.transcriber is not None
-
-                with tempfile.NamedTemporaryFile("wb+", suffix=".wav") as temp_file:
-                    wav_path = temp_file.name
-                    wav_writer: wave.Wave_write = wave.open(wav_path, "wb")
-                    with wav_writer:
-                        wav_writer.setframerate(16000)
-                        wav_writer.setsampwidth(2)
-                        wav_writer.setnchannels(1)
-                        wav_writer.writeframes(self.audio_buffer)
-
-                    if self.state.settings.decode_mode == LangSuffix.ARPA_RESCORE:
-                        texts = await self.transcriber.async_transcribe_rescore(
-                            wav_path,
-                            old_lang_dir=self.model_train_dir / "data" / "lang_arpa",
-                            new_lang_dir=self.model_train_dir
-                            / "data"
-                            / "lang_arpa_rescore",
-                            nbest=self.state.settings.nbest,
-                            max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
-                        )
-                    else:
-                        texts = await self.transcriber.async_transcribe(
-                            wav_path,
-                            self.model_train_dir
-                            / "data"
-                            / f"lang_{self.state.settings.decode_mode.value}",
-                            nbest=self.state.settings.nbest,
-                            max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
-                        )
-
-                    self.transcriber = None
+                self.transcriber = None
 
             _LOGGER.debug(
                 "Transcripts for client %s in %s second(s): %s",
@@ -572,7 +580,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
             yield chunk
 
     async def disconnect(self) -> None:
-        _LOGGER.debug("Client disconnected: %s", self.client_id)
+        pass
 
     def get_info(self) -> Info:
         # [(model_id, suffix)]

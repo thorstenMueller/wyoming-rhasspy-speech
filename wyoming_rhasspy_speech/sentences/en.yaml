@@ -104,9 +104,7 @@ intents:
       - sentences:
           - "turn on [the] {name}"
           - "turn on [the] {name} in [the] {area}"
-          - "turn on [the] {area} {name}"
           - "turn on [the] {name} (on|in) [the] {floor} [floor]"
-          - "turn on [the] {floor} [floor] {name}"
         requires_context:
           domain:
             - light
@@ -149,9 +147,7 @@ intents:
       - sentences:
           - "turn off [the] {name}"
           - "turn off [the] {name} in [the] {area}"
-          - "turn off [the] {area} {name}"
           - "turn off [the] {name} (on|in) [the] {floor} [floor]"
-          - "turn off [the] {floor} [floor] {name}"
         requires_context:
           domain:
             - light
