@@ -17,8 +17,8 @@
 </div>
 {% endif %}
 
-{% for intent_name, sentence_groups in sentences.items(): %}
-<div class="col-12 col-md-6 col-lg-4 border m-0 p-0">
+{% for intent_name, sentence_groups in sentences | dictsort(by='key'): %}
+<div class="col-12 col-md-6 col-lg-3 border m-2 p-0">
 <h2 class="bg-info text-white text-center p-1">{{ intent_name }}</h2>
 
 {% for group_idx, sentence_texts in sentence_groups.items(): %}

@@ -2,6 +2,7 @@
 
 import io
 import logging
+import re
 import shutil
 import tarfile
 import tempfile
@@ -303,6 +304,14 @@ def get_app(state: AppState) -> Flask:
 
         if intents is not None:
             sentences = sample_intents(intents)
+
+            # HassTurnOn -> Turn On
+            sentences = {
+                " ".join(
+                    re.findall("[A-Z][a-z]*", re.sub("^Hass", "", intent_name))
+                ): intent_sentences
+                for intent_name, intent_sentences in sentences.items()
+            }
         else:
             sentences = {}
 
@@ -359,6 +368,12 @@ def get_intents(
                         if not sentence_template:
                             _LOGGER.warning("Malformed sentence: %s", sentence)
                             continue
+
+                        # Override sentence output
+                        sentence_output = sentence.pop("out", None)
+                        if sentence_output:
+                            sentence.setdefault("metadata", {})
+                            sentence["metadata"]["output"] = sentence_output
 
                         intent_data.append(
                             {"sentences": [sentence_template], **sentence}

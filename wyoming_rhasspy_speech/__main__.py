@@ -116,7 +116,7 @@ async def main() -> None:
         help="Auto gain level (default: 4000)",
     )
     # Edit distance
-    parser.add_argument("--max-fuzzy-cost", type=float, default=2.0)
+    parser.add_argument("--max-fuzzy-cost", type=float, default=3.0)
     # Transcribers
     parser.add_argument("--max-active", type=int, default=7000)
     parser.add_argument("--lattice-beam", type=float, default=8.0)
@@ -206,7 +206,7 @@ async def main() -> None:
             # Download model
             model_data_dir = state.settings.model_data_dir(model.id)
             if not model_data_dir.exists():
-                _LOGGER.debug("Downloading %s", model.url)
+                _LOGGER.info("Downloading %s", model.url)
                 with urlopen(
                     model.url
                 ) as model_response, tempfile.TemporaryDirectory() as temp_dir:
@@ -227,7 +227,7 @@ async def main() -> None:
                 lists_path = state.settings.lists_path(model.id)
                 if not lists_path.exists():
                     if state.settings.hass_token:
-                        _LOGGER.debug(
+                        _LOGGER.info(
                             "Downloading Home Assistant entities from %s",
                             state.settings.hass_websocket_uri,
                         )
@@ -381,6 +381,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                             / "lang_arpa_rescore",
                             nbest=self.state.settings.nbest,
                             max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
+                            require_fuzzy=True,
                         )
                     )
                 else:
@@ -393,6 +394,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                             / f"lang_{self.state.settings.decode_mode.value}",
                             nbest=self.state.settings.nbest,
                             max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
+                            require_fuzzy=True,
                         )
                     )
             else:
@@ -513,6 +515,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                                 / "lang_arpa_rescore",
                                 nbest=self.state.settings.nbest,
                                 max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
+                                require_fuzzy=True,
                             )
                         else:
                             texts = await self.transcriber.async_transcribe(
@@ -522,6 +525,7 @@ class RhasspySpeechEventHandler(AsyncEventHandler):
                                 / f"lang_{self.state.settings.decode_mode.value}",
                                 nbest=self.state.settings.nbest,
                                 max_fuzzy_cost=self.state.settings.max_fuzzy_cost,
+                                require_fuzzy=True,
                             )
             except Exception:
                 _LOGGER.exception("Unexpected error getting transcripts")
