@@ -178,8 +178,6 @@ async def main() -> None:
         )
     )
 
-    _LOGGER.info("Ready")
-
     # Run Flask server in a separate thread
     flask_app = get_app(state)
     Thread(
@@ -262,6 +260,8 @@ async def main() -> None:
             _LOGGER.warning("Can't auto train. No model for %s", args.auto_train)
 
     wyoming_server = AsyncServer.from_uri(args.uri)
+
+    _LOGGER.info("Ready")
 
     try:
         await wyoming_server.run(partial(RhasspySpeechEventHandler, args, state))
