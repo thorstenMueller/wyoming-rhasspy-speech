@@ -62,8 +62,8 @@ lists:
       - windows
 
 expansion_rules:
-  what_is: "(qual[e] è | quant(o |(`|’|'))è | com(e |(`|’|'))è | che)"
-  the: "(l(o |a |e )|i[l] |gli |l(`|’|')[ ]|in |a |(a|ne)(l |llo |lla |lle |ll(`|’|')[ ]|gli ))"
+  what_is: "(qual[e] è | quant(o |')è | com(e |')è | che)"
+  the: "(l(o |a |e )|i[l] |gli |l'[ ]|in |a |(a|ne)(l |llo |lla |lle |ll'[ ]|gli ))"
   name: "[<the>]{name}"
 
 intents:
