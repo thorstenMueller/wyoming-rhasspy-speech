@@ -1,0 +1,246 @@
+language: de
+lists:
+  color:
+    values:
+      - in: "wei(ß|ss)"
+      - in: "schwarz"
+      - in: "rot"
+      - in: "orange"
+      - in: "gelb"
+      - in: "grün"
+      - in: "blau"
+      - in: "violett"
+      - in: "braun"
+  brightness:
+    range:
+      type: "percentage"
+      from: 10
+      to: 100
+      step: 10
+  seconds:
+    range:
+      from: 10
+      to: 100
+      step: 10
+  minutes_small:
+    range:
+      from: 2
+      to: 9
+  minutes_large:
+    range:
+      from: 10
+      to: 100
+      step: 10
+  minutes_extra:
+    values:
+      - in: fifteen
+        out: 15
+      - in: forty five
+        out: 45
+  minutes_half:
+    values:
+      - in: half
+        out: 30
+  hours_half:
+    values:
+      - in: half
+        out: 30
+  hours:
+    range:
+      from: 1
+      to: 100
+
+expansion_rules:
+  welche: "(welche[r|s|n]|was für[ <artikel_unbestimmt>[s]]) <artikel_bestimmt>"
+  artikel_bestimmt: "[(der|die|das|dem|den|des)]"
+  artikel_unbestimmt: "[(ein|eine|eines|einer|einem|einen)]"
+  artikel: "[<artikel_bestimmt>|<artikel_unbestimmt>]"
+  name: "<artikel_bestimmt> {name}"
+
+intents:
+  # nevermind
+  HassNevermind:
+    data:
+      - sentences:
+          - "vergiss es"
+          - "egal"
+          - "abbrechen"
+          - "Abbruch"
+          - "[doch ](nicht[s]|nix)"
+
+  # date, time, weather
+  HassGetCurrentTime:
+    data:
+      - sentences:
+          - "wie spät ist es"
+          - "(wie viel|wieviel) uhr (ist es|haben wir)[ jetzt]"
+          - "(nenn[e]|gib|gebe) mir die uhrzeit"
+
+  HassGetCurrentDate:
+    data:
+      - sentences:
+          - "<welche> (tag|datum) (ist|haben wir) heute"
+          - "(nenn[e]|gib|gebe) mir das[ (heutige|aktuelle)] datum"
+
+  HassGetWeather:
+    data:
+      - sentences:
+          - "wie ist[ das] Wetter"
+      - sentences:
+          - "wie ist[ das] Wetter[ (für|in) <name>]"
+          - "wie ist[ das] <name>[er|s] Wetter"
+          - "was für[ ein] Wetter (ist|hat es) in <name>"
+        requires_context:
+          domain: weather
+
+  # turn on/off
+  # open/close
+  # lock/unlock
+  # HassTurnOn:
+  #   data:
+  #     # turn on
+  #     - sentences:
+  #         - "<allume> [les] lumières"
+
+  #     - sentences:
+  #         - "<allume> [<le>]{name}"
+  #         - "<allume> [<le>]{name} <dans> [<le>]{area}"
+  #       requires_context:
+  #         domain:
+  #           - light
+  #           - switch
+
+  #     - sentences:
+  #         - "allume[z] [toutes [les]] [les] lumières de [le|la|les] {area}"
+  #         - "allume[z] [toutes [les]] [les] lumières dans [le|la|les] {area}"
+  #         - "allume[z] [toutes [les]] [les] lumières (au|dans le) [le|la|les] {floor} [étage]"
+
+  #     # open
+  #     - sentences:
+  #         - "ouvre[z] [le|la|les] {name}"
+  #       requires_context:
+  #         domain:
+  #           - cover
+  #           - valve
+
+  #     - sentences:
+  #         - "ouvre[z] [tous [les]] [les] {cover_classes} dans [le|la|les] {area}"
+  #         - "ouvre[z] [tous [les]] [les] {area} {cover_classes}"
+
+  #     - sentences:
+  #         - "ouvre[z] [tous [les]] [les] {cover_classes} (au|dans le) [le|la|les] {floor} [étage]"
+
+  #     # lock
+  #     - sentences:
+  #         - "verrouille[z] [le|la|les] {name}"
+  #       requires_context:
+  #         domain: lock
+
+  # HassTurnOff:
+  #   data:
+  #     # turn off
+  #     - sentences:
+  #         - "éteins[z] [les] lumières"
+
+  #     - sentences:
+  #         - "éteins[z] [le|la|les] {name}"
+  #         - "éteins[z] [le|la|les] {name} dans [le|la|les] {area}"
+  #       requires_context:
+  #         domain:
+  #           - light
+  #           - switch
+
+  #     # close
+  #     - sentences:
+  #         - "ferme[z] [le|la|les] {name}"
+  #       requires_context:
+  #         domain:
+  #           - cover
+  #           - valve
+
+  #     - sentences:
+  #         - "ferme[z] [tous [les]] [les] {cover_classes} dans [le|la|les] {area}"
+
+  #     # unlock
+  #     - sentences:
+  #         - "déverrouille[z] [le|la|les] {name}"
+  #       requires_context:
+  #         domain: lock
+
+  # # light brightness/color
+  # HassLightSet:
+  #   data:
+  #     # brightness
+  #     - sentences:
+  #         - "régle[z] la luminosité de [le|la|les] {name} à {brightness} pour cent"
+  #       requires_context:
+  #         domain: light
+
+  #     # color
+  #     - sentences:
+  #         - "régle[z] [la couleur de [le|la|les]] {name} à {color}"
+  #       requires_context:
+  #         domain: light
+
+  # # timers
+  # HassStartTimer:
+  #   data:
+  #     # seconds
+  #     - sentences:
+  #         - "(lance|démarre|crée) [un] minuteur de {seconds} secondes"
+
+  #     # hours + minutes
+  #     - sentences:
+  #         - "(lance|démarre|crée) [un] minuteur pour {hours} heures et {minutes_large} minutes"
+
+  # HassCancelTimer:
+  #   data:
+  #     - sentences:
+  #         - "(arrête|annule) [le|mon] minuteur"
+
+  # HassCancelAllTimers:
+  #   data:
+  #     - sentences:
+  #         - "(arrête|annule) tous [les|mes] minuteurs"
+
+  # HassTimerStatus:
+  #   data:
+  #     - sentences:
+  #         - "statut du minuteur"
+
+  # # media players
+  # HassMediaPause:
+  #   data:
+  #     - sentences:
+  #         - "pause [[la ]musique]"
+  #       requires_context:
+  #         domain: media_player
+
+  # HassMediaNext:
+  #   data:
+  #     - sentences:
+  #         - "(suivant|passe) [[ce ](morceau|chanson)]"
+
+  # # temperature
+  # HassGetTemperature:
+  #   data:
+  #     - sentences:
+  #         - "(quel[']s|quelle est) la (température|temp)"
+
+  #     - sentences:
+  #         - "(quel[']s|quelle est) [la] {area} (température|temp)"
+
+  # # questions
+  # HassGetState:
+  #   data:
+  #     - sentences:
+  #         - "est-ce que [le|la|les] {name} est {state}"
+  #       requires_context:
+  #         domain:
+  #           - cover
+  #           - valve
+  #       lists:
+  #         state:
+  #           values:
+  #             - ouvert
+  #             - fermé
