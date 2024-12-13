@@ -374,16 +374,11 @@ intents:
 
       # sensors, etc.
       - sentences:
-          - "is [the] {name} {state}"
+          - "what is [the] {name}"
         requires_context:
           domain:
-            - cover
-            - valve
-        lists:
-          state:
-            values:
-              - open
-              - closed
+            - sensor
+            - binary_sensor
 
 
   # todo
