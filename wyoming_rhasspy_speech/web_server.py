@@ -18,14 +18,15 @@ from urllib.request import urlopen
 
 from flask import Flask, Response, redirect, render_template, request
 from flask import url_for as flask_url_for
-from hassil.intents import Intents
-from hassil.util import merge_dict
 from rhasspy_speech.const import LangSuffix
 from rhasspy_speech.g2p import LexiconDatabase, get_sounds_like, guess_pronunciations
 from rhasspy_speech.tools import KaldiTools
 from rhasspy_speech.train import train_model as rhasspy_train_model
 from werkzeug.middleware.proxy_fix import ProxyFix
 from yaml import SafeDumper, safe_dump, safe_load
+
+from hassil.intents import Intents
+from hassil.util import merge_dict
 
 from .hass_api import get_exposed_dict
 from .models import MODELS
@@ -356,6 +357,13 @@ def get_intents(
     words: Optional[Dict[str, Union[str, List[str]]]] = None
 
     sentence_files: List[Union[str, Path]] = []
+
+    if state.settings.hass_builtin_intents:
+        # Add builtin intents first so that custom sentences can override
+        intents_path = _DIR / "sentences" / f"{language}.yaml"
+        if intents_path.exists():
+            sentence_files.append(intents_path)
+
     sentences_path = state.settings.sentences_path(model_id, suffix)
     if sentences_path.exists():
         temp_sentences = tempfile.NamedTemporaryFile("w+", suffix=".yaml")
@@ -396,11 +404,6 @@ def get_intents(
 
         temp_sentences.seek(0)
         sentence_files.append(temp_sentences.name)
-
-    if state.settings.hass_builtin_intents:
-        intents_path = _DIR / "sentences" / f"{language}.yaml"
-        if intents_path.exists():
-            sentence_files.append(intents_path)
 
     if not sentence_files:
         return None, None
