@@ -33,17 +33,17 @@ lists:
       step: 10
   minutes_extra:
     values:
-      - in: fifteen
+      - in: fünfzehn
         out: 15
-      - in: forty five
+      - in: fünfundvierzig
         out: 45
   minutes_half:
     values:
-      - in: half
+      - in: halb
         out: 30
   hours_half:
     values:
-      - in: half
+      - in: halb
         out: 30
   hours:
     range:
@@ -144,7 +144,6 @@ intents:
         requires_context:
           domain: scene
 
-
   HassTurnOff:
     data:
       # turn off
@@ -178,22 +177,22 @@ intents:
         requires_context:
           domain: lock
 
-  # # light brightness/color
-  # HassLightSet:
-  #   data:
-  #     # brightness
-  #     - sentences:
-  #         - "set [the] brightness of [the] {name} to {brightness} percent"
-  #         - "set [the] {name} brightness to {brightness} percent"
-  #       requires_context:
-  #         domain: light
+  # light brightness/color
+  HassLightSet:
+    data:
+      #     # brightness
+      - sentences:
+           - "Setze [die] Helligkeit von {name} auf {brightness} [Prozent]"
+           - "Setze [die] {name} Helligkeit auf {brightness} [Prozent]"
+        requires_context:
+           domain: light
 
-  #     - sentences:
-  #         - "set [the] brightness of [the] {area} to {brightness} percent"
-  #         - "set [the] {area} brightness to {brightness} percent"
+      - sentences:
+           - "Setze [die] Helligkeit {area} auf {brightness} Prozent"
+           - "Stelle [die] Helligkeit {area} auf {brightness}"
 
-  #     - sentences:
-  #         - "set [the] {floor} [floor] brightness to {brightness} percent"
+      - sentences:
+           - "set [the] {floor} [floor] brightness to {brightness} percent"
   #         - "set [the] brightness of [the] {floor} [floor] to {brightness} percent"
 
   #     # color
